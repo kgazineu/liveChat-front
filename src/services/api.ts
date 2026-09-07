@@ -1,13 +1,15 @@
 import axios from 'axios';
 import Cookies from 'js-cookie';
+import { getRuntimeConfig } from './runtime-config';
 
 const api = axios.create({
-    baseURL: process.env.NEXT_PUBLIC_API_URL,
+    timeout: 15000,
 });
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
+    config.baseURL = (await getRuntimeConfig()).apiUrl;
     const token = Cookies.get('chat_token');
-    if (token) {
+    if (token && !isPublicAuthRequest(config.url)) {
         config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
@@ -18,10 +20,13 @@ api.interceptors.response.use(
         return response;
     },
     (error) => {
-        if (error.response && (error.response.status === 403 || error.response.status === 401)) {
-            Cookies.remove('chat_token');
+        if (error.response?.status === 401 && error.config?.headers?.Authorization &&
+            !isPublicAuthRequest(error.config?.url)) {
+            Cookies.remove('chat_token', { path: '/' });
 
-            if (window.location.pathname !== '/') {
+            if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+                // Fora da árvore React: recarregar também limpa o estado autenticado em memória.
+                // eslint-disable-next-line @next/next/no-location-assign-relative-destination
                 window.location.href = '/';
             }
         }
@@ -30,3 +35,7 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+function isPublicAuthRequest(url?: string) {
+    return ['/users/login', '/users/register'].includes('/' + (url || '').replace(/^\/+/, ''));
+}

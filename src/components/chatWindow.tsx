@@ -6,6 +6,8 @@ import { Message, ChatWindowProps } from '@/src/types';
 import Cookies from 'js-cookie';
 import { Client } from '@stomp/stompjs';
 import toast from 'react-hot-toast';
+import { getRuntimeConfig } from '@/src/services/runtime-config';
+import { belongsToConversation, mergeMessages, parseMessage } from '@/src/services/messages';
 
 
 export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProps) {
@@ -15,124 +17,104 @@ export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProp
     const stompClientRef = useRef<Client | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    const selectedUserRef = useRef(selectedUser);
-    const currentUserRef = useRef(currentUser);
-
-    const scrollToBottom = () => {
-        setTimeout(() => {
-            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, 100);
-    };
+    const [connected, setConnected] = useState(false);
 
     useEffect(() => {
-        selectedUserRef.current = selectedUser;
-        currentUserRef.current = currentUser;
-        
-        if (selectedUser) {
-            api.get(`/messages/${selectedUser.id}`)
-                .then(res => {
-                    setMessages(res.data);
-                    scrollToBottom();
-                })
-                .catch(err => console.error("Erro ao carregar histórico", err));
+        let active = true;
+        let historyController: AbortController | undefined;
+        let historyVersion = 0;
+        let client: Client | undefined;
+
+        async function loadHistory() {
+            historyController?.abort();
+            historyController = new AbortController();
+            const version = ++historyVersion;
+            try {
+                const response = await api.get<Message[]>(`/messages/${selectedUser.id}`, { signal: historyController.signal });
+                if (active && version === historyVersion) {
+                    if (!Array.isArray(response.data)) throw new Error('Histórico inválido');
+                    setMessages(previous => mergeMessages(response.data, previous));
+                }
+            } catch {
+                if (active && version === historyVersion) toast.error('Erro ao carregar histórico. Tente reabrir a conversa.');
+            }
         }
-    }, [selectedUser, currentUser]);
 
-    useEffect(() => {
-        const token = Cookies.get('chat_token');
-        if (!token) return;
-
-        const client = new Client({
-            brokerURL: process.env.NEXT_PUBLIC_BROKER_URL,
-            connectHeaders: {
-                Authorization: `Bearer ${token}`,
-            },
-            reconnectDelay: 5000, 
-            heartbeatIncoming: 4000,
-            heartbeatOutgoing: 4000,
-        });
-
-        client.onConnect = (frame) => {
-            client.subscribe(`/user/queue/messages`, (message) => {
-                const receivedMsg: Message = JSON.parse(message.body);
-
-                setMessages(prev => {
-                    if (prev.some(m => m.id === receivedMsg.id)) return prev;
-
-                    const myId = String(currentUser.id);
-                    const myEmail = String(currentUser.email);
-
-                    const otherId = String(selectedUserRef.current.id);
-                    const otherEmail = String(selectedUserRef.current.email);
-
-                    const msgSenderId = String(receivedMsg.senderId);
-                    const msgSenderEmail = String(receivedMsg.senderEmail);
-
-                    const msgReceiverId = String(receivedMsg.receiverId);
-                    const msgReceiverEmail = String(receivedMsg.receiverEmail);
-
-                    const isMyMessageToSelected = 
-                        (msgSenderId === myId || msgSenderEmail === myEmail) && 
-                        (msgReceiverId === otherId || msgReceiverEmail === otherEmail);
-
-                    const isMessageFromSelectedToMe = 
-                        (msgSenderId === otherId || msgSenderEmail === otherEmail) &&
-                        (msgReceiverId === myId || msgReceiverEmail === myEmail);
-
-                    if (isMyMessageToSelected || isMessageFromSelectedToMe) {
-                        return [...prev, receivedMsg];
-                    }
-
-                    if (msgSenderId !== myId && msgSenderEmail !== myEmail) {
-                        toast(`Nova mensagem de ${receivedMsg.senderName}`, { icon: '📩' });
-                    }
-                    
-                    return prev;
+        void loadHistory();
+        async function connect() {
+            try {
+                const config = await getRuntimeConfig();
+                if (!active) return;
+                const token = Cookies.get('chat_token');
+                if (!token) return;
+                client = new Client({
+                    brokerURL: config.brokerUrl,
+                    connectHeaders: { Authorization: `Bearer ${token}` },
+                    reconnectDelay: 5000,
+                    connectionTimeout: 10000,
+                    heartbeatIncoming: 4000,
+                    heartbeatOutgoing: 4000,
                 });
-                scrollToBottom();
-            });
-        };
-
-        client.onStompError = (frame) => {
-            console.error('Erro no Broker: ' + frame.headers['message']);
-        };
-        
-        client.activate();
-        stompClientRef.current = client;
-
+                client.beforeConnect = () => {
+                    const currentToken = Cookies.get('chat_token');
+                    if (!currentToken) { void client?.deactivate(); return; }
+                    client!.connectHeaders = { Authorization: `Bearer ${currentToken}` };
+                };
+                client.onConnect = () => {
+                    if (!active) return;
+                    setConnected(true);
+                    client!.subscribe('/user/queue/messages', frame => {
+                        if (!active) return;
+                        const message = parseMessage(frame.body);
+                        if (!message) { toast.error('Mensagem recebida em formato inválido.'); return; }
+                        if (belongsToConversation(message, currentUser, selectedUser)) {
+                            setMessages(previous => mergeMessages(previous, [message]));
+                        } else if (String(message.senderId) !== String(currentUser.id) && message.senderEmail !== currentUser.email) {
+                            toast(`Nova mensagem de ${message.senderName || 'outro contato'}`, { icon: '📩' });
+                        }
+                    });
+                    // Recupera mensagens perdidas durante uma desconexão, preservando eventos ao vivo.
+                    void loadHistory();
+                };
+                client.onWebSocketClose = () => { if (active) setConnected(false); };
+                client.onWebSocketError = () => { if (active) setConnected(false); };
+                client.onStompError = () => {
+                    if (active) { setConnected(false); toast.error('O servidor recusou a conexão do chat.'); }
+                };
+                stompClientRef.current = client;
+                client.activate();
+            } catch {
+                if (active) toast.error('Não foi possível configurar a conexão do chat. Reabra a conversa.');
+            }
+        }
+        void connect();
         return () => {
-            client.deactivate();
+            active = false;
+            historyController?.abort();
+            stompClientRef.current = null;
+            void client?.deactivate();
         };
-     
-    }, [currentUser.email, currentUser.id]);
+    }, [currentUser, selectedUser]);
 
     useEffect(() => {
-        scrollToBottom();
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
     const handleSendMessage = (e?: React.FormEvent) => {
         e?.preventDefault();
-        if (!newMessage.trim() || !stompClientRef.current?.connected) return;
-
-        const timestamp = new Date().toISOString();
-
-        const chatMessage = {
-            receiverId: selectedUser.id,
-            content: newMessage
-        };
-
-        setMessages(prev => [...prev]);
-        setNewMessage("");
-
-
+        if (!newMessage.trim()) return;
+        if (!stompClientRef.current?.connected) {
+            toast.error('Chat desconectado. Aguarde a reconexão.');
+            return;
+        }
         try {
             stompClientRef.current.publish({
-                destination: "/app/chat",
-                body: JSON.stringify(chatMessage)
-            });          
-        } catch (error) {
-            console.error(error);
-            toast.error("Erro ao enviar mensagem");
+                destination: '/app/chat',
+                body: JSON.stringify({ receiverId: selectedUser.id, content: newMessage }),
+            });
+            setNewMessage('');
+        } catch {
+            toast.error('Erro ao enviar mensagem. Seu texto foi preservado.');
         }
     };
 
@@ -146,7 +128,7 @@ export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProp
                     <div>
                         <h2 className="font-bold text-white">{selectedUser.name}</h2>
                         <span className="text-xs text-green-400 flex items-center gap-1">
-                            <span className="w-2 h-2 bg-green-500 rounded-full"></span> Online
+                            {connected ? 'Chat conectado' : 'Chat desconectado — reconectando...'}
                         </span>
                     </div>
                 </div>
@@ -192,7 +174,8 @@ export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProp
                 <button 
                     type="submit" 
                     className="bg-blue-600 hover:bg-blue-500 text-white rounded-full p-3 transition-colors flex items-center justify-center"
-                    disabled={!newMessage.trim()}
+                    aria-label="Enviar mensagem"
+                    disabled={!newMessage.trim() || !connected}
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
                         <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />

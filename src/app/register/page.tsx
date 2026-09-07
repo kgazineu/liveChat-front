@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState } from 'react';
@@ -6,32 +5,38 @@ import { useRouter } from 'next/navigation';
 import api from '@/src/services/api';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import { errorMessage } from '@/src/services/errors';
 
 export default function RegisterPage(){
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [loading, setLoading] = useState(false);
     const router = useRouter();
 
     async function handleRegister(e: React.FormEvent) {
         e.preventDefault();
+        if (loading) return;
+        setLoading(true);
 
         const loadingToast = toast.loading('Criando sua conta...');
 
         try {
-            await api.post('users/register', { name, email, password });
+            await api.post('/users/register', { name, email, password });
             
             toast.dismiss(loadingToast);
             toast.success('Conta criada com sucesso! Faça login.');
 
             router.push('/'); 
             
-        } catch (error: any) {
+        } catch (error: unknown) {
             toast.dismiss(loadingToast);
             console.error('Registration failed:', error);
             
-            const message = error.response?.data?.message || 'Falha no cadastro. Verifique os dados.';
+            const message = errorMessage(error, 'Falha no cadastro. Verifique os dados.');
             toast.error(message);
+        } finally {
+            setLoading(false);
         }
     }
 
@@ -73,8 +78,8 @@ export default function RegisterPage(){
                     />
                 </div>
 
-                <button type="submit" className="w-full p-2 font-bold bg-blue-600 rounded hover:bg-blue-500 transition">
-                    Cadastrar
+                <button disabled={loading} type="submit" className="w-full p-2 font-bold bg-blue-600 rounded hover:bg-blue-500 transition">
+                    {loading ? 'Cadastrando...' : 'Cadastrar'}
                 </button>
                 
                 <p className="mt-4 text-center text-sm text-gray-400">
