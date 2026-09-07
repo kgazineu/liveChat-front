@@ -1,0 +1,25 @@
+name: live-chat-front
+
+services:
+  frontend:
+    image: ${FRONTEND_IMAGE:-live-chat-front:local}
+    build:
+      context: .
+    init: true
+    restart: unless-stopped
+    environment:
+      API_URL: ${API_URL:-http://localhost:8080}
+      BROKER_URL: ${BROKER_URL:-ws://localhost:8080/ws}
+      NODE_OPTIONS: --max-old-space-size=384
+    ports:
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3000/api/health',{signal:AbortSignal.timeout(4000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
 import { useState } from 'react';
@@ -7,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import { errorMessage } from '@/src/services/errors';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -23,11 +23,17 @@ export default function LoginPage() {
     try {
       const response = await api.post('/users/login', { email, password });
       const { token } = response.data;
+      if (typeof token !== 'string' || !token.trim()) {
+        toast.dismiss(loadingToast);
+        toast.error('Resposta de login inválida: token ausente.');
+        setLoading(false);
+        return;
+      }
 
       Cookies.set('chat_token', token, {
         expires: 1 / 12, 
         path: '/',       
-        secure: false,  
+        secure: window.location.protocol === 'https:',
         sameSite: 'lax'
       });
 
@@ -36,11 +42,11 @@ export default function LoginPage() {
 
       router.replace('/chat');
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.dismiss(loadingToast);
       console.error(error);
 
-      const message = error.response?.data?.message || 'Email ou senha inválidos';
+      const message = errorMessage(error, 'Email ou senha inválidos');
       toast.error(message);
       
       setLoading(false); 

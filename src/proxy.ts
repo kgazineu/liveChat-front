@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
-export function middleware(request: NextRequest) {
+function noStoreRedirect(url: URL) {
+  const response = NextResponse.redirect(url)
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
+}
+
+export function proxy(request: NextRequest) {
   const token = request.cookies.get('chat_token')?.value
 
   const homeURL = new URL('/', request.url)
@@ -9,13 +15,13 @@ export function middleware(request: NextRequest) {
 
   if (request.nextUrl.pathname.startsWith('/chat')) {
     if (!token) {
-      return NextResponse.redirect(homeURL)
+      return noStoreRedirect(homeURL)
     }
   }
 
-  if (request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/register') {
+  if (request.nextUrl.pathname === '/' || request.nextUrl.pathname === '/register') {
     if (token) {
-      return NextResponse.redirect(dashboardURL)
+      return noStoreRedirect(dashboardURL)
     }
   }
 

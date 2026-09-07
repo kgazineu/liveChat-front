@@ -1,12 +1,13 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 'use client'
 
+import axios from 'axios';
 import { useState, useEffect, useCallback } from 'react';
 import api from '@/src/services/api';
 import { User, FriendRequest } from '@/src/types';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
 import toast from 'react-hot-toast';
+import { errorMessage } from '@/src/services/errors';
 
 interface SidebarProps {
     onUserSelected: (user: User) => void;
@@ -21,15 +22,13 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
     const [foundUser, setFoundUser] = useState<User | null>(null);
     const [activeTab, setActiveTab] = useState<'friends' | 'requests'>('friends');
     
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const [loggedUser, setLoggedUser] = useState<User | null>(null);
 
     const fetchFriends = useCallback(async () => {
         try {
             const res = await api.get('/friendships');
             setFriends(res.data);
         } catch (error) {
-            console.error("Erro ao buscar amigos", error);
+            toast.error(errorMessage(error, "Erro ao buscar amigos"));
         }
     }, []);
 
@@ -38,7 +37,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
             const res = await api.get('/friendships/requests');
             setRequests(res.data);
         } catch (error) {
-            console.error("Erro ao buscar solicitações", error);
+            toast.error(errorMessage(error, "Erro ao buscar solicitações"));
         }
     }, []);
 
@@ -46,7 +45,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
         await Promise.all([fetchFriends(), fetchRequests()]);
     }, [fetchFriends, fetchRequests]);
 
-    useEffect(() => { async function loadInitialData() { await refreshData(); } loadInitialData(); }, []);
+    useEffect(() => { async function loadInitialData() { await refreshData(); } loadInitialData(); }, [refreshData]);
 
 
     async function handleSearch() {
@@ -70,11 +69,11 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
             }
             toast.dismiss(loading);
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             toast.dismiss(loading);
             console.error("Erro na busca:", error);
             
-            if (error.response?.status === 404) {
+            if (axios.isAxiosError(error) && error.response?.status === 404) {
                 toast.error('Usuário não encontrado.');
             } else {
                 toast.error('Erro ao buscar.');
@@ -98,15 +97,16 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
             setEmailSearch('');
             await refreshData();
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             toast.dismiss(loading);
             console.error("Erro ao enviar pedido:", error);
-            const msg = error.response?.data?.message || 'Erro ao enviar pedido';
+            const msg = errorMessage(error, 'Erro ao enviar pedido');
             toast.error(msg);
         }
     }
 
     async function acceptRequest(id: number) {
+        try {
         await toast.promise(
             api.patch(`/friendships/${id}/accept`),
             {
@@ -117,10 +117,14 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
                 },
             }
         );
-        refreshData();
+        await refreshData();
+        } catch {
+            // toast.promise já exibiu o erro; consumir a rejeição do evento.
+        }
     }
 
     async function rejectRequest(id: number) {
+        try {
         await toast.promise(
             api.patch(`/friendships/${id}/reject`),
             {
@@ -129,11 +133,14 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
                 error: 'Erro ao rejeitar',
             }
         );
-        refreshData();
+        await refreshData();
+        } catch {
+            // toast.promise já exibiu o erro; consumir a rejeição do evento.
+        }
     }
 
     function handleLogout() {
-        Cookies.remove('chat_token');
+        Cookies.remove('chat_token', { path: '/' });
         router.replace('/');
         toast.success('Você saiu do chat.');
     }
@@ -218,7 +225,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
                                 </div>
                                 <div>
                                     <p className="font-medium">{friend.name}</p>
-                                    <p className="text-xs text-green-400">Online</p>
+                                    <p className="text-xs text-gray-400">{friend.email}</p>
                                 </div>
                             </div>
                         ))}

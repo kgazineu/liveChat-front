@@ -12,6 +12,8 @@ export default function ChatPage() {
     const router = useRouter();
     const [selectedFriend, setSelectedFriend] = useState<User | null>(null);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [loadError, setLoadError] = useState(false);
+    const [attempt, setAttempt] = useState(0);
 
     useEffect(() => {
     const token = Cookies.get('chat_token');
@@ -21,14 +23,22 @@ export default function ChatPage() {
         return;
     }
 
-    api.get('/users/me')
-        .then(res => setCurrentUser(res.data))
-        .catch(() => {
-        Cookies.remove('chat_token');
-        router.replace('/');
-        });
-    }, [router]);
+    let active = true;
+    const controller = new AbortController();
+    api.get('/users/me', { signal: controller.signal })
+        .then(res => { if (active) setCurrentUser(res.data); })
+        .catch(() => { if (active) setLoadError(true); });
+    return () => { active = false; controller.abort(); };
+    }, [router, attempt]);
 
+
+    if (loadError && !currentUser) {
+        return <div className="flex h-screen flex-col gap-4 items-center justify-center bg-gray-950 text-white">
+            <p>Não foi possível carregar seu perfil.</p>
+            <button onClick={() => { setLoadError(false); setAttempt(value => value + 1); }}>Tentar novamente</button>
+            <button onClick={() => { Cookies.remove('chat_token', { path: '/' }); router.replace('/'); }}>Sair</button>
+        </div>;
+    }
 
     if (!currentUser) {
         return <div className="flex h-screen items-center justify-center bg-gray-950 text-white">Carregando...</div>;
@@ -41,7 +51,8 @@ export default function ChatPage() {
             <main className="flex-1 flex flex-col bg-gray-900 border-l border-gray-800 relative">
                 
                 {selectedFriend ? (
-                    <ChatWindow 
+                    <ChatWindow
+                        key={selectedFriend.id}
                         currentUser={currentUser} 
                         selectedUser={selectedFriend} 
                     />

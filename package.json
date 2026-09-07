@@ -6,29 +6,39 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint --max-warnings=0",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@stomp/stompjs": "^7.2.1",
     "axios": "^1.13.2",
     "js-cookie": "^3.0.5",
-    "next": "16.0.8",
-    "react": "19.2.1",
-    "react-dom": "19.2.1",
-    "react-hot-toast": "^2.6.0",
-    "sockjs-client": "^1.6.1"
+    "next": "16.3.4",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "react-hot-toast": "^2.6.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
     "@types/js-cookie": "^3.0.6",
-    "@types/node": "^20",
+    "@types/node": "24.13.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/sockjs-client": "^1.5.4",
-    "@types/stompjs": "^2.3.10",
     "eslint": "^9",
-    "eslint-config-next": "16.0.8",
+    "eslint-config-next": "16.3.4",
+    "jsdom": "30.0.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
-  }
+    "typescript": "^5",
+    "vitest": "5.0.0"
+  },
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
+  "packageManager": "npm@11.19.0"
 }
