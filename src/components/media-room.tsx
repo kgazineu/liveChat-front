@@ -95,6 +95,50 @@ const EMPTY_METRICS: WebRtcMetrics = {
   sampledAt: null,
 };
 
+let callAudioContext: AudioContext | null = null;
+
+export function prepareCallSounds() {
+  if (typeof window === 'undefined' || !window.AudioContext) return null;
+
+  try {
+    const context = callAudioContext ?? new window.AudioContext();
+    callAudioContext = context;
+    void context.resume().catch(() => undefined);
+    return context;
+  } catch {
+    return null;
+  }
+}
+
+function playCallSound(kind: 'join' | 'leave') {
+  const context = prepareCallSounds();
+  if (!context) return;
+
+  try {
+    const start = context.currentTime;
+    const frequencies = kind === 'join' ? [440, 660] : [660, 440];
+
+    void context.resume().then(() => {
+      frequencies.forEach((frequency, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const toneStart = start + index * 0.1;
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(frequency, toneStart);
+        gain.gain.setValueAtTime(0.0001, toneStart);
+        gain.gain.exponentialRampToValueAtTime(0.12, toneStart + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.12);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(toneStart);
+        oscillator.stop(toneStart + 0.13);
+      });
+    }).catch(() => undefined);
+  } catch {
+    // Voice audio keeps its own unblock prompt when the browser rejects Web Audio.
+  }
+}
+
 function mediaSessionsEndpoint(target: MediaTarget) {
   return target.kind === 'DIRECT'
     ? `/direct-channels/${target.channelId}/media-sessions`
@@ -311,10 +355,14 @@ async function readWebRtcMetrics(
 export function MediaRoom({
   currentUser,
   target,
+  visible,
+  onOpenAction,
   onLeaveAction,
 }: {
   currentUser: User;
   target: MediaTarget;
+  visible: boolean;
+  onOpenAction: () => void;
   onLeaveAction: () => void;
 }) {
   const { connected: realtimeConnected, subscribePresence } = useRealtime();
@@ -378,6 +426,7 @@ export function MediaRoom({
     const seenEvents = new Set<string>();
     const removedParticipants = new Set<string>();
     const previousBytes = previousBytesRef.current;
+    let leaveSoundPlayed = false;
 
     localMediaRef.current = EMPTY_MEDIA;
     previousBytes.clear();
@@ -526,6 +575,10 @@ export function MediaRoom({
       room.on(RoomEvent.Disconnected, () => {
         if (!active) return;
         joined = false;
+        if (!leaveSoundPlayed) {
+          leaveSoundPlayed = true;
+          playCallSound('leave');
+        }
         connectionRef.current = null;
         credential = null;
         setConnectionState('disconnected');
@@ -539,8 +592,16 @@ export function MediaRoom({
       room.on(RoomEvent.TrackUnsubscribed, refreshTrackViews);
       room.on(RoomEvent.TrackMuted, refreshTrackViews);
       room.on(RoomEvent.TrackUnmuted, refreshTrackViews);
-      room.on(RoomEvent.ParticipantConnected, refreshTrackViews);
-      room.on(RoomEvent.ParticipantDisconnected, refreshTrackViews);
+      room.on(RoomEvent.ParticipantConnected, () => {
+        if (!active) return;
+        refreshTrackViews();
+        playCallSound('join');
+      });
+      room.on(RoomEvent.ParticipantDisconnected, () => {
+        if (!active) return;
+        refreshTrackViews();
+        playCallSound('leave');
+      });
       room.on(RoomEvent.ActiveSpeakersChanged, updateSpeakers);
       room.on(RoomEvent.AudioPlaybackStatusChanged, playing => {
         if (active) setAutoplayBlocked(!playing);
@@ -561,6 +622,7 @@ export function MediaRoom({
       try {
         await room.connect(credential.url, credential.token);
         if (!active) return;
+        playCallSound('join');
         setConnectionState('connected');
         setAutoplayBlocked(!room.canPlaybackAudio);
         refreshTrackViews();
@@ -597,7 +659,10 @@ export function MediaRoom({
       previousBytes.clear();
       if (roomRef.current === room) roomRef.current = null;
       if (room) void room.disconnect(true);
-      if (joined) void api.delete(endpoint).catch(() => undefined);
+      if (joined) {
+        if (!leaveSoundPlayed) playCallSound('leave');
+        void api.delete(endpoint).catch(() => undefined);
+      }
     };
   }, [applyOwnPresence, currentUser.id, endpoint, retry, subscribePresence, target]);
 
@@ -706,7 +771,7 @@ export function MediaRoom({
 
   const speakerIds = activeSpeakers;
   const expandedTrack = expandedTrackId
-    ? trackViews.video.find(view => view.id === expandedTrackId && view.source === Track.Source.ScreenShare) ?? null
+    ? trackViews.video.find(view => view.id === expandedTrackId) ?? null
     : null;
   const visibleSessions = sessions.length
     ? sessions
@@ -725,8 +790,10 @@ export function MediaRoom({
         } satisfies MediaSession];
 
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-(--surface-main) text-slate-100">
-      <header className="flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-6">
+    <>
+      {visible && (
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-(--surface-main) text-slate-100">
+          <header className="flex min-h-16 shrink-0 flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-violet-300" aria-hidden="true">◉</span>
@@ -860,7 +927,9 @@ export function MediaRoom({
             </div>
           </div>
         </aside>
-      </div>
+          </div>
+        </section>
+      )}
 
       <CallControlDock
         currentUser={currentUser}
@@ -869,10 +938,11 @@ export function MediaRoom({
         localMedia={localMedia}
         busyControl={busyControl}
         onToggle={kind => void toggleMedia(kind)}
+        onOpen={onOpenAction}
         onLeave={onLeaveAction}
       />
 
-      {expandedTrack && (
+      {visible && expandedTrack && (
         <ScreenShareViewer
           view={expandedTrack}
           onCloseAction={() => setExpandedTrackId(null)}
@@ -889,7 +959,7 @@ export function MediaRoom({
           />
         ))}
       </div>
-    </section>
+    </>
   );
 }
 
@@ -909,18 +979,16 @@ function VideoTrackTile({ view, onExpand }: { view: TrackView; onExpand: () => v
   return (
     <figure className={`group relative min-h-56 overflow-hidden rounded-2xl border bg-slate-950 shadow-xl shadow-black/20 ${isScreenShare ? 'border-violet-400/25' : 'border-white/10'}`}>
       <video ref={elementRef} autoPlay playsInline muted={view.local} className="h-full w-full object-contain" />
-      {isScreenShare && (
-        <button
-          type="button"
-          onClick={onExpand}
-          className="absolute inset-0 z-10 grid place-items-center bg-black/0 transition hover:bg-black/35 focus-visible:bg-black/35"
-          aria-label={`Ampliar tela compartilhada por ${view.local ? 'você' : view.participantName}`}
-        >
-          <span className="translate-y-2 rounded-xl border border-white/15 bg-slate-950/85 px-4 py-2 text-sm font-semibold text-white opacity-0 shadow-xl backdrop-blur transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
-            ⛶ Ampliar compartilhamento
-          </span>
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onExpand}
+        className="absolute inset-0 z-10 grid place-items-center bg-black/0 transition hover:bg-black/35 focus-visible:bg-black/35"
+        aria-label={`Ampliar ${isScreenShare ? 'tela compartilhada' : 'câmera'} de ${view.local ? 'você' : view.participantName}`}
+      >
+        <span className="translate-y-2 rounded-xl border border-white/15 bg-slate-950/85 px-4 py-2 text-sm font-semibold text-white opacity-0 shadow-xl backdrop-blur transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+          ⛶ {isScreenShare ? 'Ampliar compartilhamento' : 'Ampliar câmera'}
+        </span>
+      </button>
       <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-2 bg-linear-to-t from-black/80 to-transparent px-3 pb-3 pt-8 text-xs">
         <span className="truncate font-medium">{view.local ? 'Você' : view.participantName}</span>
         <span className="rounded-full bg-black/50 px-2 py-1 text-slate-300">
@@ -963,21 +1031,24 @@ export function ScreenShareViewer({
   async function enterFullscreen() {
     const container = containerRef.current;
     if (!container?.requestFullscreen) {
-      onErrorAction('Este navegador não oferece modo de tela cheia para o compartilhamento.');
+      onErrorAction('Este navegador não oferece modo de tela cheia para este vídeo.');
       return;
     }
     try {
       await container.requestFullscreen();
     } catch {
-      onErrorAction('Não foi possível abrir o compartilhamento em tela cheia.');
+      onErrorAction('Não foi possível abrir o vídeo em tela cheia.');
     }
   }
 
+  const isScreenShare = view.source === Track.Source.ScreenShare;
+  const mediaLabel = isScreenShare ? 'Tela' : 'Câmera';
+
   return (
-    <div className="fixed inset-0 z-70 flex flex-col bg-black/95 p-3 backdrop-blur-md sm:p-5" role="dialog" aria-modal="true" aria-label="Compartilhamento de tela ampliado">
+    <div className="fixed inset-0 z-70 flex flex-col bg-black/95 p-3 backdrop-blur-md sm:p-5" role="dialog" aria-modal="true" aria-label={`${mediaLabel} ampliada`}>
       <div className="mb-3 flex shrink-0 items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/90 px-4 py-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-white">Tela de {view.local ? 'você' : view.participantName}</p>
+          <p className="truncate text-sm font-semibold text-white">{mediaLabel} de {view.local ? 'você' : view.participantName}</p>
           <p className="text-xs text-slate-500">Visualização ampliada</p>
         </div>
         <div className="flex items-center gap-2">
@@ -1062,6 +1133,7 @@ function CallControlDock({
   localMedia,
   busyControl,
   onToggle,
+  onOpen,
   onLeave,
 }: {
   currentUser: User;
@@ -1070,6 +1142,7 @@ function CallControlDock({
   localMedia: LocalMediaState;
   busyControl: 'microphone' | 'camera' | 'screen' | null;
   onToggle: (kind: 'microphone' | 'camera' | 'screen') => void;
+  onOpen: () => void;
   onLeave: () => void;
 }) {
   const disabled = connectionState !== 'connected' || busyControl != null;
@@ -1079,10 +1152,16 @@ function CallControlDock({
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-violet-500/20 text-xs font-bold text-violet-200" aria-hidden="true">
           {currentUser.name.charAt(0).toUpperCase()}
         </span>
-        <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 rounded-lg px-1 py-0.5 text-left transition hover:bg-white/5"
+          aria-label={`Abrir chamada em ${roomTitle}`}
+          title="Abrir chamada"
+        >
           <p className="truncate text-xs font-semibold text-white">{currentUser.name}</p>
           <p className="truncate text-[10px] text-emerald-300">◉ {connectionLabel(connectionState)} em {roomTitle}</p>
-        </div>
+        </button>
         <button
           type="button"
           onClick={onLeave}

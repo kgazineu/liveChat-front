@@ -26,7 +26,7 @@ import type {
   TextTarget,
   User,
 } from '@/src/types';
-import { MediaRoom } from './media-room';
+import { MediaRoom, prepareCallSounds } from './media-room';
 import MessagePanel from './message-panel';
 import { RealtimeProvider, useRealtime } from './realtime-provider';
 
@@ -106,6 +106,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
 
   const [activeServerId, setActiveServerId] = useState<string | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<SelectedTarget | null>(null);
+  const [activeMediaTarget, setActiveMediaTarget] = useState<MediaTarget | null>(null);
   const [homeView, setHomeView] = useState<HomeView>('friends');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [modal, setModal] = useState<ModalName>(null);
@@ -295,12 +296,21 @@ function Workspace({ currentUser }: { currentUser: User }) {
   function selectServerChannel(channel: ServerChannel) {
     if (!activeServer) return;
     if (channel.type === 'VOICE') {
-      setSelectedTarget({
-        kind: 'SERVER_VOICE',
-        serverId: activeServer.id,
-        channelId: channel.id,
-        title: channel.name,
-      });
+      if (activeMediaTarget?.kind === 'SERVER_VOICE' &&
+        activeMediaTarget.serverId === activeServer.id &&
+        activeMediaTarget.channelId === channel.id) {
+        setSelectedTarget(activeMediaTarget);
+      } else {
+        prepareCallSounds();
+        const mediaTarget: MediaTarget = {
+          kind: 'SERVER_VOICE',
+          serverId: activeServer.id,
+          channelId: channel.id,
+          title: channel.name,
+        };
+        setActiveMediaTarget(mediaTarget);
+        setSelectedTarget(mediaTarget);
+      }
     } else {
       setSelectedTarget({
         kind: 'SERVER_TEXT',
@@ -540,7 +550,50 @@ function Workspace({ currentUser }: { currentUser: User }) {
     }
   }
 
-  const mediaActive = selectedTarget?.kind === 'SERVER_VOICE' || selectedTarget?.kind === 'DIRECT_CALL';
+  const mediaActive = activeMediaTarget !== null;
+  const showingActiveMedia = activeMediaTarget !== null && (
+    (selectedTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.kind === 'SERVER_VOICE' &&
+      selectedTarget.channelId === activeMediaTarget.channelId) ||
+    (selectedTarget?.kind === 'DIRECT_CALL' && activeMediaTarget.kind === 'DIRECT' &&
+      selectedTarget.channelId === activeMediaTarget.channelId)
+  );
+
+  function openActiveMedia() {
+    if (!activeMediaTarget) return;
+    if (activeMediaTarget.kind === 'SERVER_VOICE') {
+      setActiveServerId(activeMediaTarget.serverId);
+      setSelectedTarget(activeMediaTarget);
+      void Promise.all([
+        loadChannels(activeMediaTarget.serverId),
+        loadMembers(activeMediaTarget.serverId),
+      ]);
+    } else {
+      setActiveServerId(null);
+      setSelectedTarget({
+        kind: 'DIRECT_CALL',
+        channelId: activeMediaTarget.channelId,
+        title: activeMediaTarget.title,
+      });
+    }
+    setMobileSidebarOpen(false);
+  }
+
+  function leaveActiveMedia() {
+    if (!activeMediaTarget) return;
+    if (selectedTarget?.kind === 'DIRECT_CALL' && activeMediaTarget.kind === 'DIRECT' &&
+      selectedTarget.channelId === activeMediaTarget.channelId) {
+      setSelectedTarget({
+        kind: 'DIRECT',
+        channelId: activeMediaTarget.channelId,
+        title: activeMediaTarget.title,
+        subtitle: 'Mensagem direta',
+      });
+    } else if (selectedTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.kind === 'SERVER_VOICE' &&
+      selectedTarget.channelId === activeMediaTarget.channelId) {
+      setSelectedTarget(null);
+    }
+    setActiveMediaTarget(null);
+  }
 
   return (
     <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-950 text-slate-100">
@@ -615,6 +668,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
             members={members}
             membersLoading={membersLoading}
             selectedTarget={selectedTarget}
+            activeMediaTarget={activeMediaTarget}
             onSelectChannel={selectServerChannel}
             onRetry={() => void loadChannels(activeServer.id)}
             onCreateChannel={() => setModal('channel')}
@@ -666,35 +720,27 @@ function Workspace({ currentUser }: { currentUser: User }) {
           ☰
         </button>
 
-        {selectedTarget?.kind === 'SERVER_VOICE' ? (
-          <MediaRoom
-            key={`voice-${selectedTarget.channelId}`}
-            currentUser={currentUser}
-            target={selectedTarget}
-            onLeaveAction={() => setSelectedTarget(null)}
-          />
-        ) : selectedTarget?.kind === 'DIRECT_CALL' ? (
-          <MediaRoom
-            key={`direct-call-${selectedTarget.channelId}`}
-            currentUser={currentUser}
-            target={{ kind: 'DIRECT', channelId: selectedTarget.channelId, title: selectedTarget.title }}
-            onLeaveAction={() => setSelectedTarget({
-              kind: 'DIRECT',
-              channelId: selectedTarget.channelId,
-              title: selectedTarget.title,
-              subtitle: 'Mensagem direta',
-            })}
-          />
-        ) : selectedTarget ? (
+        {!showingActiveMedia && (selectedTarget && selectedTarget.kind !== 'SERVER_VOICE' && selectedTarget.kind !== 'DIRECT_CALL' ? (
           <MessagePanel
             key={`${selectedTarget.kind}-${selectedTarget.channelId}`}
             currentUser={currentUser}
             target={selectedTarget}
-            onStartCall={selectedTarget.kind === 'DIRECT' ? () => setSelectedTarget({
-              kind: 'DIRECT_CALL',
-              channelId: selectedTarget.channelId,
-              title: selectedTarget.title,
-            }) : undefined}
+            onStartCall={selectedTarget.kind === 'DIRECT' ? () => {
+              if (activeMediaTarget?.kind !== 'DIRECT' ||
+                activeMediaTarget.channelId !== selectedTarget.channelId) {
+                prepareCallSounds();
+                setActiveMediaTarget({
+                  kind: 'DIRECT',
+                  channelId: selectedTarget.channelId,
+                  title: selectedTarget.title,
+                });
+              }
+              setSelectedTarget({
+                kind: 'DIRECT_CALL',
+                channelId: selectedTarget.channelId,
+                title: selectedTarget.title,
+              });
+            } : undefined}
           />
         ) : activeServer ? (
           <ServerWelcome server={activeServer} onOpenNavigation={() => setMobileSidebarOpen(true)} />
@@ -708,6 +754,17 @@ function Workspace({ currentUser }: { currentUser: User }) {
               setHomeView(view);
               setMobileSidebarOpen(true);
             }}
+          />
+        ))}
+
+        {activeMediaTarget && (
+          <MediaRoom
+            key={`${activeMediaTarget.kind}-${activeMediaTarget.channelId}`}
+            currentUser={currentUser}
+            target={activeMediaTarget}
+            visible={showingActiveMedia}
+            onOpenAction={openActiveMedia}
+            onLeaveAction={leaveActiveMedia}
           />
         )}
       </main>
@@ -975,6 +1032,7 @@ function ServerSidebar({
   members,
   membersLoading,
   selectedTarget,
+  activeMediaTarget,
   onSelectChannel,
   onRetry,
   onCreateChannel,
@@ -989,6 +1047,7 @@ function ServerSidebar({
   members: ServerMember[];
   membersLoading: boolean;
   selectedTarget: SelectedTarget | null;
+  activeMediaTarget: MediaTarget | null;
   onSelectChannel: (channel: ServerChannel) => void;
   onRetry: () => void;
   onCreateChannel: () => void;
@@ -1037,8 +1096,9 @@ function ServerSidebar({
               <ChannelButton
                 key={channel.id}
                 label={channel.name}
-                icon="◖"
-                active={selectedTarget?.kind === 'SERVER_VOICE' && selectedTarget.channelId === channel.id}
+                icon={activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id ? '◉' : '◖'}
+                active={(selectedTarget?.kind === 'SERVER_VOICE' && selectedTarget.channelId === channel.id) ||
+                  (activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id)}
                 onClick={() => onSelectChannel(channel)}
               />
             ))}

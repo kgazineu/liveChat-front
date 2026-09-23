@@ -71,3 +71,27 @@ it('fecha a visualização ampliada com Escape quando não está em fullscreen',
   fireEvent.keyDown(window, { key: 'Escape' });
   expect(close).toHaveBeenCalledOnce();
 });
+
+it('usa o mesmo visualizador ampliado para uma câmera', () => {
+  const track = { attach: vi.fn(), detach: vi.fn() } as unknown as RemoteVideoTrack;
+
+  render(
+    <ScreenShareViewer
+      view={{
+        id: 'camera-track',
+        track,
+        participantId: 'user-2',
+        participantName: 'Bruno',
+        source: Track.Source.Camera,
+        local: false,
+      }}
+      onCloseAction={vi.fn()}
+      onErrorAction={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByRole('dialog', { name: 'Câmera ampliada' })).toBeInTheDocument();
+  expect(screen.getByText('Câmera de Bruno')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /tela cheia/i })).toBeInTheDocument();
+  expect(track.attach).toHaveBeenCalledWith(expect.any(HTMLVideoElement));
+});
