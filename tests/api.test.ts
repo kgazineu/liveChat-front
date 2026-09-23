@@ -30,7 +30,14 @@ it('invalida a sessão apenas em 401 autenticado', async () => {
   await expect(api.get('/users/me', { adapter: rejectWith(401) })).rejects.toThrow();
   expect(Cookies.get('chat_token')).toBeUndefined();
 });
-it.each(['/users/login', '/users/register', '/users/refresh'])('não envia Bearer nem remove sessão por falha em %s', async url => {
+it.each([
+  '/users/login',
+  '/users/register',
+  '/users/refresh',
+  '/users/password-reset/request',
+  '/users/password-reset/confirm',
+  '/users/profile-update/confirm',
+])('não envia Bearer nem remove sessão por falha em %s', async url => {
   await expect(api.post(url, {}, { adapter: async config => {
     expect(config.headers.Authorization).toBeUndefined();
     return rejectWith(401)(config);

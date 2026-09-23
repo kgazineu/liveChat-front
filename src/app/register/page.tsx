@@ -1,91 +1,167 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import api from '@/src/services/api';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
+import AuthShell, {
+  authInputClassName,
+  authPrimaryButtonClassName,
+} from '@/src/components/auth-shell';
+import api from '@/src/services/api';
 import { errorMessage } from '@/src/services/errors';
 
-export default function RegisterPage(){
-    const [name, setName] = useState('');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
-    const [loading, setLoading] = useState(false);
-    const router = useRouter();
+export default function RegisterPage() {
+  const router = useRouter();
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordConfirmation, setPasswordConfirmation] = useState('');
+  const [loading, setLoading] = useState(false);
 
-    async function handleRegister(e: React.FormEvent) {
-        e.preventDefault();
-        if (loading) return;
-        setLoading(true);
+  async function handleRegister(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
 
-        const loadingToast = toast.loading('Criando sua conta...');
-
-        try {
-            await api.post('/users/register', { name, email, password });
-            
-            toast.dismiss(loadingToast);
-            toast.success('Conta criada com sucesso! Faça login.');
-
-            router.push('/'); 
-            
-        } catch (error: unknown) {
-            toast.dismiss(loadingToast);
-            console.error('Registration failed:', error);
-            
-            const message = errorMessage(error, 'Falha no cadastro. Verifique os dados.');
-            toast.error(message);
-        } finally {
-            setLoading(false);
-        }
+    const normalizedName = name.trim();
+    const normalizedEmail = email.trim();
+    if (!normalizedName || !normalizedEmail || !password || !passwordConfirmation) {
+      toast.error('Preencha todos os campos.');
+      return;
+    }
+    if (password.length < 8 || password.length > 72) {
+      toast.error('A senha deve ter entre 8 e 72 caracteres.');
+      return;
+    }
+    if (password !== passwordConfirmation) {
+      toast.error('As senhas não coincidem.');
+      return;
     }
 
-    return (
-        <div className="flex min-h-screen items-center justify-center bg-gray-900 text-white">
-            <form onSubmit={handleRegister} className="w-full max-w-sm p-6 bg-gray-800 rounded-lg shadow-md">
-                <h2 className="mb-6 text-2xl font-bold text-center">Crie sua conta</h2>
-                
-                <div className="mb-4">
-                    <label className="block mb-1 text-sm">Nome</label>
-                    <input 
-                        className="w-full p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-500"
-                        type="text" 
-                        value={name} 
-                        onChange={e => setName(e.target.value)}
-                        required 
-                    />
-                </div>
+    setLoading(true);
+    const loadingToast = toast.loading('Criando sua conta...');
 
-                <div className="mb-4">
-                    <label className="block mb-1 text-sm">Email</label>
-                    <input 
-                        className="w-full p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-500"
-                        type="email" 
-                        value={email} 
-                        onChange={e => setEmail(e.target.value)}
-                        required
-                    />
-                </div>
+    try {
+      await api.post('/users/register', {
+        name: normalizedName,
+        email: normalizedEmail,
+        password,
+      });
+      toast.dismiss(loadingToast);
+      toast.success('Conta criada com sucesso! Faça login.');
+      router.push('/');
+    } catch (error: unknown) {
+      toast.dismiss(loadingToast);
+      toast.error(errorMessage(error, 'Falha no cadastro. Verifique os dados.'));
+    } finally {
+      setLoading(false);
+    }
+  }
 
-                <div className="mb-6">
-                    <label className="block mb-1 text-sm">Senha</label>
-                    <input 
-                        className="w-full p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-500"
-                        type="password" 
-                        value={password} 
-                        onChange={e => setPassword(e.target.value)}
-                        required
-                    />
-                </div>
-
-                <button disabled={loading} type="submit" className="w-full p-2 font-bold bg-blue-600 rounded hover:bg-blue-500 transition">
-                    {loading ? 'Cadastrando...' : 'Cadastrar'}
-                </button>
-                
-                <p className="mt-4 text-center text-sm text-gray-400">
-                    Já tem conta? <Link href="/" className="text-blue-400 hover:underline">Faça Login</Link>
-                </p>
-            </form>
+  return (
+    <AuthShell
+      eyebrow="Comece agora"
+      title="Crie sua conta"
+      description="Seu espaço para conversar, reunir amigos e participar de comunidades."
+      footer={
+        <p className="text-center text-sm text-slate-400">
+          Já tem uma conta?{' '}
+          <Link href="/" className="font-semibold text-violet-300 transition hover:text-violet-200 hover:underline">
+            Fazer login
+          </Link>
+        </p>
+      }
+    >
+      <form onSubmit={handleRegister} className="space-y-4">
+        <div>
+          <label htmlFor="name" className="mb-2 block text-sm font-medium text-slate-200">
+            Nome
+          </label>
+          <input
+            id="name"
+            name="name"
+            className={authInputClassName}
+            type="text"
+            autoComplete="name"
+            placeholder="Como devemos chamar você?"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            disabled={loading}
+            required
+          />
         </div>
-    );
+
+        <div>
+          <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-200">
+            Email
+          </label>
+          <input
+            id="email"
+            name="email"
+            className={authInputClassName}
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            placeholder="voce@exemplo.com"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            disabled={loading}
+            required
+          />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-200">
+              Senha
+            </label>
+            <input
+              id="password"
+              name="password"
+              className={authInputClassName}
+              type="password"
+              autoComplete="new-password"
+              placeholder="Entre 8 e 72 caracteres"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              disabled={loading}
+              minLength={8}
+              maxLength={72}
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="password-confirmation" className="mb-2 block text-sm font-medium text-slate-200">
+              Confirmar
+            </label>
+            <input
+              id="password-confirmation"
+              name="passwordConfirmation"
+              className={authInputClassName}
+              type="password"
+              autoComplete="new-password"
+              placeholder="Repita a senha"
+              value={passwordConfirmation}
+              onChange={(event) => setPasswordConfirmation(event.target.value)}
+              disabled={loading}
+              minLength={8}
+              maxLength={72}
+              required
+            />
+          </div>
+        </div>
+
+        <button type="submit" disabled={loading} aria-busy={loading} className={authPrimaryButtonClassName}>
+          {loading ? (
+            <>
+              <span aria-hidden="true" className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              Criando conta...
+            </>
+          ) : (
+            'Criar minha conta'
+          )}
+        </button>
+      </form>
+    </AuthShell>
+  );
 }

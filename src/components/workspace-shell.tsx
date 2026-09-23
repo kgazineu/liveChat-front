@@ -21,13 +21,14 @@ import type {
   MediaTarget,
   ServerChannel,
   ServerInvite,
+  ServerMember,
   ServerSummary,
   TextTarget,
   User,
 } from '@/src/types';
 import { MediaRoom } from './media-room';
 import MessagePanel from './message-panel';
-import { RealtimeProvider } from './realtime-provider';
+import { RealtimeProvider, useRealtime } from './realtime-provider';
 
 type HomeView = 'friends' | 'directs' | 'requests' | 'invites';
 type DirectCallTarget = { kind: 'DIRECT_CALL'; channelId: string; title: string };
@@ -79,9 +80,17 @@ export default function WorkspaceShell({ currentUser }: { currentUser: User }) {
 
 function Workspace({ currentUser }: { currentUser: User }) {
   const router = useRouter();
+  const {
+    connectionRevision,
+    subscribeFriendships,
+    subscribeServerInvites,
+    subscribeServerMembers,
+  } = useRealtime();
   const channelsRequestRef = useRef(0);
+  const membersRequestRef = useRef(0);
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [channels, setChannels] = useState<ServerChannel[]>([]);
+  const [members, setMembers] = useState<ServerMember[]>([]);
   const [friends, setFriends] = useState<User[]>([]);
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [invites, setInvites] = useState<ServerInvite[]>([]);
@@ -90,6 +99,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
   const [serversLoading, setServersLoading] = useState(true);
   const [communityLoading, setCommunityLoading] = useState(true);
   const [channelsLoading, setChannelsLoading] = useState(false);
+  const [membersLoading, setMembersLoading] = useState(false);
   const [serversError, setServersError] = useState<string | null>(null);
   const [communityError, setCommunityError] = useState<string | null>(null);
   const [channelsError, setChannelsError] = useState<string | null>(null);
@@ -99,6 +109,8 @@ function Workspace({ currentUser }: { currentUser: User }) {
   const [homeView, setHomeView] = useState<HomeView>('friends');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [modal, setModal] = useState<ModalName>(null);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const [serverName, setServerName] = useState('');
@@ -109,6 +121,9 @@ function Workspace({ currentUser }: { currentUser: User }) {
   const [searching, setSearching] = useState(false);
   const [foundUser, setFoundUser] = useState<User | null>(null);
   const [searchComplete, setSearchComplete] = useState(false);
+  const [accountName, setAccountName] = useState(currentUser.name);
+  const [accountEmail, setAccountEmail] = useState(currentUser.email);
+  const [profileUpdatePending, setProfileUpdatePending] = useState(false);
 
   const loadServers = useCallback(async () => {
     setServersLoading(true);
@@ -174,6 +189,26 @@ function Workspace({ currentUser }: { currentUser: User }) {
     }
   }, []);
 
+  const loadMembers = useCallback(async (serverId: string) => {
+    const requestId = ++membersRequestRef.current;
+    setMembersLoading(true);
+    setMembers([]);
+    try {
+      const response = await api.get<ServerMember[]>(`/servers/${serverId}/members`);
+      if (!Array.isArray(response.data)) throw new Error('Lista de membros inválida');
+      if (requestId !== membersRequestRef.current) return null;
+      setMembers(response.data);
+      return response.data;
+    } catch (error) {
+      if (requestId === membersRequestRef.current) {
+        toast.error(errorMessage(error, 'Não foi possível carregar os membros do servidor.'));
+      }
+      return null;
+    } finally {
+      if (requestId === membersRequestRef.current) setMembersLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
     queueMicrotask(() => {
@@ -183,6 +218,38 @@ function Workspace({ currentUser }: { currentUser: User }) {
       active = false;
     };
   }, [loadCommunity, loadServers]);
+
+  useEffect(() => {
+    const unsubscribeFriendships = subscribeFriendships(() => void loadCommunity());
+    const unsubscribeInvites = subscribeServerInvites(() => {
+      void Promise.all([loadCommunity(), loadServers()]);
+    });
+    const unsubscribeMembers = subscribeServerMembers(event => {
+      void loadServers();
+      if (event.serverId === activeServerId) void loadMembers(event.serverId);
+    });
+    return () => {
+      unsubscribeFriendships();
+      unsubscribeInvites();
+      unsubscribeMembers();
+    };
+  }, [activeServerId, loadCommunity, loadMembers, loadServers, subscribeFriendships, subscribeServerInvites, subscribeServerMembers]);
+
+  useEffect(() => {
+    if (connectionRevision === 0) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      void Promise.all([
+        loadCommunity(),
+        loadServers(),
+        ...(activeServerId ? [loadChannels(activeServerId), loadMembers(activeServerId)] : []),
+      ]);
+    });
+    return () => {
+      active = false;
+    };
+  }, [activeServerId, connectionRevision, loadChannels, loadCommunity, loadMembers, loadServers]);
 
   const activeServer = servers.find(server => server.id === activeServerId) ?? null;
   const pendingInvites = useMemo(
@@ -208,7 +275,10 @@ function Workspace({ currentUser }: { currentUser: User }) {
 
   function showHome(view: HomeView = 'friends') {
     channelsRequestRef.current += 1;
+    membersRequestRef.current += 1;
     setChannelsLoading(false);
+    setMembersLoading(false);
+    setMembers([]);
     setActiveServerId(null);
     setSelectedTarget(null);
     setHomeView(view);
@@ -219,7 +289,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
     setActiveServerId(server.id);
     setSelectedTarget(null);
     setMobileSidebarOpen(true);
-    void loadChannels(server.id);
+    void Promise.all([loadChannels(server.id), loadMembers(server.id)]);
   }
 
   function selectServerChannel(channel: ServerChannel) {
@@ -413,6 +483,65 @@ function Workspace({ currentUser }: { currentUser: User }) {
     router.replace('/');
   }
 
+  async function requestPasswordChange() {
+    if (busyAction) return;
+    setBusyAction('password-reset');
+    try {
+      await api.post('/users/me/password-reset');
+      toast.success('Enviamos um link seguro para alterar sua senha.');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Não foi possível solicitar a alteração de senha.'));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function requestProfileUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busyAction) return;
+    const name = accountName.trim();
+    const email = accountEmail.trim().toLowerCase();
+    if (!name || name.length > 100) {
+      toast.error('O nome deve ter entre 1 e 100 caracteres.');
+      return;
+    }
+    if (!email || email.length > 254) {
+      toast.error('Informe um e-mail válido com até 254 caracteres.');
+      return;
+    }
+    if (name === currentUser.name && email === currentUser.email.toLowerCase()) {
+      toast.error('Altere ao menos um campo antes de continuar.');
+      return;
+    }
+
+    setBusyAction('profile-update');
+    try {
+      await api.put('/users/me', { name, email });
+      setProfileUpdatePending(true);
+      toast.success('Enviamos a confirmação para seu e-mail atual.');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Não foi possível solicitar a atualização do perfil.'));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function deleteAccount() {
+    if (busyAction || !window.confirm('Excluir sua conta permanentemente? Esta ação não pode ser desfeita.')) return;
+    setBusyAction('delete-account');
+    try {
+      await api.delete(`/users/${currentUser.id}`);
+      clearSession();
+      toast.success('Sua conta foi excluída.');
+      router.replace('/');
+    } catch (error) {
+      toast.error(errorMessage(error, 'Não foi possível excluir sua conta.'));
+      setBusyAction(null);
+    }
+  }
+
+  const mediaActive = selectedTarget?.kind === 'SERVER_VOICE' || selectedTarget?.kind === 'DIRECT_CALL';
+
   return (
     <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-950 text-slate-100">
       <ServerRail
@@ -424,8 +553,47 @@ function Workspace({ currentUser }: { currentUser: User }) {
         onServer={showServer}
         onCreate={() => setModal('server')}
         onRetry={() => void loadServers()}
-        onLogout={logout}
+        onSettings={() => setSettingsMenuOpen(open => !open)}
       />
+
+      {settingsMenuOpen && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 cursor-default bg-transparent"
+            onClick={() => setSettingsMenuOpen(false)}
+            aria-label="Fechar menu de configurações"
+          />
+          <div className="fixed bottom-3 left-18 z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 p-2 shadow-2xl shadow-black/50">
+            <div className="border-b border-white/7 px-3 py-2">
+              <p className="truncate text-sm font-semibold text-white">{currentUser.name}</p>
+              <p className="truncate text-xs text-slate-500">{currentUser.email}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSettingsMenuOpen(false);
+                setAccountName(currentUser.name);
+                setAccountEmail(currentUser.email);
+                setProfileUpdatePending(false);
+                setAccountSettingsOpen(true);
+              }}
+              className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/7"
+            >
+              <span aria-hidden="true">⚙</span>
+              Configurações da conta
+            </button>
+            <button
+              type="button"
+              onClick={logout}
+              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-rose-300 transition hover:bg-rose-500/10"
+            >
+              <span aria-hidden="true">↪</span>
+              Sair da conta
+            </button>
+          </div>
+        </>
+      )}
 
       {mobileSidebarOpen && (
         <button
@@ -436,7 +604,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
         />
       )}
 
-      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} fixed inset-y-0 left-16 z-30 w-[min(20rem,calc(100vw-4rem))] flex-col border-r border-white/7 bg-slate-900 shadow-2xl md:static md:z-auto md:flex md:w-72 md:shrink-0 md:shadow-none`}>
+      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} ${mediaActive ? 'pb-28' : ''} fixed inset-y-0 left-16 z-30 w-[min(20rem,calc(100vw-4rem))] flex-col border-r border-white/7 bg-slate-900 shadow-2xl md:static md:z-auto md:flex md:w-72 md:shrink-0 md:shadow-none`}>
         {activeServer ? (
           <ServerSidebar
             server={activeServer}
@@ -444,6 +612,8 @@ function Workspace({ currentUser }: { currentUser: User }) {
             channelsError={channelsError}
             textChannels={textChannels}
             voiceChannels={voiceChannels}
+            members={members}
+            membersLoading={membersLoading}
             selectedTarget={selectedTarget}
             onSelectChannel={selectServerChannel}
             onRetry={() => void loadChannels(activeServer.id)}
@@ -625,6 +795,97 @@ function Workspace({ currentUser }: { currentUser: User }) {
           </form>
         </Modal>
       )}
+
+      {accountSettingsOpen && (
+        <Modal
+          title="Configurações da conta"
+          description="Gerencie seus dados de acesso e sua conta."
+          onClose={() => setAccountSettingsOpen(false)}
+        >
+          <div className="space-y-5">
+            <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/4 p-4">
+              <Avatar name={currentUser.name} />
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-white">{currentUser.name}</p>
+                <p className="truncate text-sm text-slate-400">{currentUser.email}</p>
+              </div>
+            </div>
+
+            <form onSubmit={requestProfileUpdate} className="grid gap-3">
+              <Field label="Nome de usuário" htmlFor="account-name">
+                <input
+                  id="account-name"
+                  className={inputClass}
+                  value={accountName}
+                  onChange={event => {
+                    setAccountName(event.target.value);
+                    setProfileUpdatePending(false);
+                  }}
+                  maxLength={100}
+                  required
+                />
+              </Field>
+              <Field label="E-mail" htmlFor="account-email">
+                <input
+                  id="account-email"
+                  type="email"
+                  className={inputClass}
+                  value={accountEmail}
+                  onChange={event => {
+                    setAccountEmail(event.target.value);
+                    setProfileUpdatePending(false);
+                  }}
+                  maxLength={254}
+                  required
+                />
+              </Field>
+              <p className="rounded-xl border border-cyan-400/15 bg-cyan-400/6 p-3 text-xs leading-relaxed text-cyan-100/75">
+                A alteração só será aplicada após você confirmar o link enviado para <strong>{currentUser.email}</strong>.
+              </p>
+              {profileUpdatePending && (
+                <p role="status" className="rounded-xl border border-emerald-400/15 bg-emerald-400/8 p-3 text-xs text-emerald-200">
+                  Solicitação criada. Verifique o seu e-mail atual; o link expira em aproximadamente 15 minutos.
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={busyAction !== null}
+                className={primaryButtonClass}
+              >
+                {busyAction === 'profile-update' ? 'Enviando confirmação…' : 'Salvar alterações'}
+              </button>
+            </form>
+
+            <div className="rounded-2xl border border-white/8 bg-white/3 p-4">
+              <h3 className="text-sm font-semibold text-white">Senha</h3>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                Enviaremos um link de uso único para seu e-mail. Ao concluir a troca, todas as sessões anteriores serão invalidadas.
+              </p>
+              <button
+                type="button"
+                onClick={() => void requestPasswordChange()}
+                disabled={busyAction !== null}
+                className={`${secondaryButtonClass} mt-3 w-full`}
+              >
+                {busyAction === 'password-reset' ? 'Enviando link…' : 'Alterar minha senha'}
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-rose-400/15 bg-rose-500/5 p-4">
+              <h3 className="text-sm font-semibold text-rose-200">Zona de perigo</h3>
+              <p className="mt-1 text-xs text-rose-200/60">A exclusão da conta é permanente.</p>
+              <button
+                type="button"
+                onClick={() => void deleteAccount()}
+                disabled={busyAction !== null}
+                className="mt-3 w-full rounded-xl border border-rose-400/20 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/20 disabled:opacity-50"
+              >
+                {busyAction === 'delete-account' ? 'Excluindo…' : 'Excluir minha conta'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -638,7 +899,7 @@ function ServerRail({
   onServer,
   onCreate,
   onRetry,
-  onLogout,
+  onSettings,
 }: {
   servers: ServerSummary[];
   activeServerId: string | null;
@@ -648,7 +909,7 @@ function ServerRail({
   onServer: (server: ServerSummary) => void;
   onCreate: () => void;
   onRetry: () => void;
-  onLogout: () => void;
+  onSettings: () => void;
 }) {
   return (
     <nav className="flex w-16 shrink-0 flex-col items-center border-r border-white/7 bg-slate-950 py-3" aria-label="Servidores">
@@ -694,12 +955,12 @@ function ServerRail({
       </div>
       <button
         type="button"
-        onClick={onLogout}
-        className="mt-3 grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/5 text-sm text-slate-400 transition hover:bg-red-500/15 hover:text-red-300"
-        aria-label="Sair"
-        title="Sair"
+        onClick={onSettings}
+        className="mt-3 grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/5 text-base text-slate-400 transition hover:bg-violet-500/15 hover:text-violet-200"
+        aria-label="Abrir configurações"
+        title="Configurações"
       >
-        ↪
+        ⚙
       </button>
     </nav>
   );
@@ -711,6 +972,8 @@ function ServerSidebar({
   channelsError,
   textChannels,
   voiceChannels,
+  members,
+  membersLoading,
   selectedTarget,
   onSelectChannel,
   onRetry,
@@ -723,6 +986,8 @@ function ServerSidebar({
   channelsError: string | null;
   textChannels: ServerChannel[];
   voiceChannels: ServerChannel[];
+  members: ServerMember[];
+  membersLoading: boolean;
   selectedTarget: SelectedTarget | null;
   onSelectChannel: (channel: ServerChannel) => void;
   onRetry: () => void;
@@ -779,6 +1044,19 @@ function ServerSidebar({
             ))}
           </ChannelGroup>
         )}
+        <ChannelGroup title={`Membros — ${members.length}`}>
+          {membersLoading && <p className="px-2 py-2 text-xs text-slate-500">Atualizando membros…</p>}
+          {!membersLoading && members.map(member => (
+            <div key={member.userId} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-400">
+              <Avatar name={member.userName} small />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium text-slate-300">{member.userName}</p>
+                <p className="text-[10px] text-slate-600">{member.role === 'OWNER' ? 'Proprietário' : 'Membro'}</p>
+              </div>
+            </div>
+          ))}
+          {!membersLoading && members.length === 0 && <p className="px-2 py-2 text-xs text-slate-600">Nenhum membro disponível.</p>}
+        </ChannelGroup>
       </div>
     </>
   );

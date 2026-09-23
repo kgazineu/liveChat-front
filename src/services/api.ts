@@ -68,5 +68,12 @@ api.interceptors.response.use(
 export default api;
 
 function isPublicAuthRequest(url?: string) {
-    return ['/users/login', '/users/register', '/users/refresh'].includes('/' + (url || '').replace(/^\/+/, ''));
+    return [
+        '/users/login',
+        '/users/register',
+        '/users/refresh',
+        '/users/password-reset/request',
+        '/users/password-reset/confirm',
+        '/users/profile-update/confirm',
+    ].includes('/' + (url || '').replace(/^\/+/, ''));
 }

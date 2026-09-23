@@ -15,32 +15,59 @@ import {
 import toast from 'react-hot-toast';
 import api from '@/src/services/api';
 import { getRuntimeConfig } from '@/src/services/runtime-config';
-import type { ChannelMessage, MediaPresenceEvent } from '@/src/types';
+import type {
+  ChannelMessage,
+  FriendshipEvent,
+  MediaPresenceEvent,
+  ServerInviteEvent,
+  ServerMemberEvent,
+} from '@/src/types';
 
-type MessageListener = (message: ChannelMessage) => void;
-type PresenceListener = (event: MediaPresenceEvent) => void;
+type Listener<T> = (event: T) => void;
 
 interface RealtimeContextValue {
   connected: boolean;
-  subscribeMessages: (listener: MessageListener) => () => void;
-  subscribePresence: (listener: PresenceListener) => () => void;
+  connectionRevision: number;
+  subscribeMessages: (listener: Listener<ChannelMessage>) => () => void;
+  subscribePresence: (listener: Listener<MediaPresenceEvent>) => () => void;
+  subscribeFriendships: (listener: Listener<FriendshipEvent>) => () => void;
+  subscribeServerInvites: (listener: Listener<ServerInviteEvent>) => () => void;
+  subscribeServerMembers: (listener: Listener<ServerMemberEvent>) => () => void;
 }
 
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
+
 function isChannelMessage(value: unknown): value is ChannelMessage {
-  if (!value || typeof value !== 'object') return false;
-  const message = value as Partial<ChannelMessage>;
-  return message.id != null && typeof message.channelId === 'string' &&
-    typeof message.content === 'string' && typeof message.authorId === 'string' &&
-    typeof message.authorName === 'string' && typeof message.createdAt === 'string';
+  if (!isObject(value)) return false;
+  return value.id != null && typeof value.channelId === 'string' &&
+    typeof value.content === 'string' && typeof value.authorId === 'string' &&
+    typeof value.authorName === 'string' && typeof value.createdAt === 'string';
 }
 
 function isPresenceEvent(value: unknown): value is MediaPresenceEvent {
-  if (!value || typeof value !== 'object') return false;
-  const event = value as Partial<MediaPresenceEvent>;
-  return typeof event.type === 'string' && !!event.participant &&
-    typeof event.participant.channelId === 'string' && typeof event.participant.userId === 'string';
+  if (!isObject(value) || !isObject(value.participant)) return false;
+  return typeof value.type === 'string' && typeof value.participant.channelId === 'string' &&
+    typeof value.participant.userId === 'string';
+}
+
+function isFriendshipEvent(value: unknown): value is FriendshipEvent {
+  return isObject(value) && typeof value.type === 'string' && value.type.startsWith('friendship.request.') &&
+    typeof value.friendshipId === 'number' && typeof value.requesterId === 'string' &&
+    typeof value.addresseeId === 'string';
+}
+
+function isServerInviteEvent(value: unknown): value is ServerInviteEvent {
+  return isObject(value) && typeof value.type === 'string' && value.type.startsWith('server.invite.') &&
+    typeof value.inviteId === 'number' && typeof value.serverId === 'string';
+}
+
+function isServerMemberEvent(value: unknown): value is ServerMemberEvent {
+  return isObject(value) && value.type === 'server.member.joined' && typeof value.serverId === 'string' &&
+    isObject(value.member) && typeof value.member.userId === 'string';
 }
 
 function parseFrame<T>(body: string, guard: (value: unknown) => value is T): T | null {
@@ -52,10 +79,19 @@ function parseFrame<T>(body: string, guard: (value: unknown) => value is T): T |
   }
 }
 
+function notify<T>(body: string, guard: (value: unknown) => value is T, listeners: Set<Listener<T>>) {
+  const event = parseFrame(body, guard);
+  if (event) listeners.forEach(listener => listener(event));
+}
+
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const [connected, setConnected] = useState(false);
-  const messageListeners = useRef(new Set<MessageListener>());
-  const presenceListeners = useRef(new Set<PresenceListener>());
+  const [connectionRevision, setConnectionRevision] = useState(0);
+  const messageListeners = useRef(new Set<Listener<ChannelMessage>>());
+  const presenceListeners = useRef(new Set<Listener<MediaPresenceEvent>>());
+  const friendshipListeners = useRef(new Set<Listener<FriendshipEvent>>());
+  const serverInviteListeners = useRef(new Set<Listener<ServerInviteEvent>>());
+  const serverMemberListeners = useRef(new Set<Listener<ServerMemberEvent>>());
 
   useEffect(() => {
     let active = true;
@@ -85,7 +121,6 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         };
         client.onConnect = () => {
           if (!active) return;
-          setConnected(true);
           client!.subscribe('/user/queue/messages', frame => {
             const message = parseFrame(frame.body, isChannelMessage);
             if (!message) {
@@ -94,18 +129,24 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
             }
             messageListeners.current.forEach(listener => listener(message));
           });
-          client!.subscribe('/user/queue/media-presence', frame => {
-            const event = parseFrame(frame.body, isPresenceEvent);
-            if (!event) return;
-            presenceListeners.current.forEach(listener => listener(event));
-          });
+          client!.subscribe('/user/queue/media-presence', frame =>
+            notify(frame.body, isPresenceEvent, presenceListeners.current));
+          client!.subscribe('/user/queue/friendships', frame =>
+            notify(frame.body, isFriendshipEvent, friendshipListeners.current));
+          client!.subscribe('/user/queue/server-invites', frame =>
+            notify(frame.body, isServerInviteEvent, serverInviteListeners.current));
+          client!.subscribe('/user/queue/server-members', frame =>
+            notify(frame.body, isServerMemberEvent, serverMemberListeners.current));
+
+          // As assinaturas são registradas antes de liberar a reconciliação REST nos consumidores.
+          setConnected(true);
+          setConnectionRevision(revision => revision + 1);
         };
         client.onWebSocketClose = () => active && setConnected(false);
         client.onWebSocketError = () => active && setConnected(false);
         client.onStompError = () => {
           if (!active) return;
           setConnected(false);
-          // Força a renovação do JWT, quando necessária, antes da próxima tentativa STOMP.
           void api.get('/users/me').catch(() => undefined);
           toast.error('A conexão em tempo real foi recusada pelo servidor.');
         };
@@ -123,20 +164,44 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const subscribeMessages = useCallback((listener: MessageListener) => {
+  const subscribeMessages = useCallback((listener: Listener<ChannelMessage>) => {
     messageListeners.current.add(listener);
     return () => messageListeners.current.delete(listener);
   }, []);
-
-  const subscribePresence = useCallback((listener: PresenceListener) => {
+  const subscribePresence = useCallback((listener: Listener<MediaPresenceEvent>) => {
     presenceListeners.current.add(listener);
     return () => presenceListeners.current.delete(listener);
   }, []);
+  const subscribeFriendships = useCallback((listener: Listener<FriendshipEvent>) => {
+    friendshipListeners.current.add(listener);
+    return () => friendshipListeners.current.delete(listener);
+  }, []);
+  const subscribeServerInvites = useCallback((listener: Listener<ServerInviteEvent>) => {
+    serverInviteListeners.current.add(listener);
+    return () => serverInviteListeners.current.delete(listener);
+  }, []);
+  const subscribeServerMembers = useCallback((listener: Listener<ServerMemberEvent>) => {
+    serverMemberListeners.current.add(listener);
+    return () => serverMemberListeners.current.delete(listener);
+  }, []);
 
-  const value = useMemo(
-    () => ({ connected, subscribeMessages, subscribePresence }),
-    [connected, subscribeMessages, subscribePresence],
-  );
+  const value = useMemo(() => ({
+    connected,
+    connectionRevision,
+    subscribeMessages,
+    subscribePresence,
+    subscribeFriendships,
+    subscribeServerInvites,
+    subscribeServerMembers,
+  }), [
+    connected,
+    connectionRevision,
+    subscribeFriendships,
+    subscribeMessages,
+    subscribePresence,
+    subscribeServerInvites,
+    subscribeServerMembers,
+  ]);
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
 }
