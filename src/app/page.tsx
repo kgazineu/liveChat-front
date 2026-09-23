@@ -3,10 +3,10 @@
 import { useState } from 'react';
 import api from '@/src/services/api';
 import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { errorMessage } from '@/src/services/errors';
+import { persistSession, type SessionResponse } from '@/src/services/session';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -21,21 +21,8 @@ export default function LoginPage() {
     const loadingToast = toast.loading('Entrando...');
 
     try {
-      const response = await api.post('/users/login', { email, password });
-      const { token } = response.data;
-      if (typeof token !== 'string' || !token.trim()) {
-        toast.dismiss(loadingToast);
-        toast.error('Resposta de login inválida: token ausente.');
-        setLoading(false);
-        return;
-      }
-
-      Cookies.set('chat_token', token, {
-        expires: 1 / 12, 
-        path: '/',       
-        secure: window.location.protocol === 'https:',
-        sameSite: 'lax'
-      });
+      const response = await api.post<SessionResponse>('/users/login', { email, password });
+      persistSession(response.data);
 
       toast.dismiss(loadingToast);
       toast.success('Bem-vindo de volta!');

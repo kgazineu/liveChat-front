@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "liveChat",
-  description: "Real time chat application",
+  title: "LiveChat",
+  description: "Comunidades, mensagens e chamadas em tempo real.",
 };
 
 export default function RootLayout({
@@ -35,18 +35,18 @@ export default function RootLayout({
           toastOptions={{
             duration: 4000,
             style: {
-              background: '#333', // Fundo escuro para combinar com o app
-              color: '#fff',      // Texto branco
+              background: '#111827',
+              color: '#fff',
             },
             success: {
               iconTheme: {
-                primary: '#16a34a', // Verde
+                primary: '#16a34a',
                 secondary: 'white',
               },
             },
             error: {
               iconTheme: {
-                primary: '#dc2626', // Vermelho
+                primary: '#dc2626',
                 secondary: 'white',
               },
             },
