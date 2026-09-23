@@ -337,6 +337,8 @@ export function MediaRoom({
   const [notice, setNotice] = useState<string | null>(null);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<WebRtcMetrics>(EMPTY_METRICS);
+  const [showMetrics, setShowMetrics] = useState(false);
+  const [expandedTrackId, setExpandedTrackId] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -392,6 +394,7 @@ export function MediaRoom({
       setNotice(null);
       setFatalError(null);
       setMetrics(EMPTY_METRICS);
+      setExpandedTrackId(null);
     });
 
     const upsertPresence = (event: MediaPresenceEvent) => {
@@ -702,6 +705,9 @@ export function MediaRoom({
   }
 
   const speakerIds = activeSpeakers;
+  const expandedTrack = expandedTrackId
+    ? trackViews.video.find(view => view.id === expandedTrackId && view.source === Track.Source.ScreenShare) ?? null
+    : null;
   const visibleSessions = sessions.length
     ? sessions
     : connectionState === 'loading' || connectionState === 'connecting'
@@ -778,7 +784,11 @@ export function MediaRoom({
           ) : trackViews.video.length ? (
             <div className="grid auto-rows-[minmax(220px,1fr)] grid-cols-1 gap-3 md:grid-cols-2">
               {trackViews.video.map(view => (
-                <VideoTrackTile key={`${view.participantId}:${view.id}`} view={view} />
+                <VideoTrackTile
+                  key={`${view.participantId}:${view.id}`}
+                  view={view}
+                  onExpand={() => setExpandedTrackId(view.id)}
+                />
               ))}
             </div>
           ) : (
@@ -793,7 +803,18 @@ export function MediaRoom({
             </div>
           )}
 
-          <MetricsPanel metrics={metrics} />
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowMetrics(visible => !visible)}
+              aria-expanded={showMetrics}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/8 bg-white/3 px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-white/7 hover:text-slate-200"
+            >
+              <span aria-hidden="true">{showMetrics ? '⌃' : '⌄'}</span>
+              {showMetrics ? 'Ocultar qualidade WebRTC' : 'Mostrar qualidade WebRTC'}
+            </button>
+          </div>
+          {showMetrics && <MetricsPanel metrics={metrics} />}
         </main>
 
         <aside className="w-full shrink-0 border-t border-white/10 bg-black/10 p-4 xl:w-80 xl:border-l xl:border-t-0 xl:p-5">
@@ -841,42 +862,23 @@ export function MediaRoom({
         </aside>
       </div>
 
-      <footer className="shrink-0 border-t border-white/10 bg-black/20 px-4 py-3 sm:px-6">
-        <div className="mx-auto flex max-w-3xl flex-wrap items-center justify-center gap-2">
-          <MediaButton
-            label={localMedia.microphoneEnabled ? 'Desligar microfone' : 'Ligar microfone'}
-            active={localMedia.microphoneEnabled}
-            busy={busyControl === 'microphone'}
-            disabled={connectionState !== 'connected' || busyControl != null}
-            onClick={() => void toggleMedia('microphone')}
-            icon={localMedia.microphoneEnabled ? '🎙' : '🔇'}
-          />
-          <MediaButton
-            label={localMedia.cameraEnabled ? 'Desligar câmera' : 'Ligar câmera'}
-            active={localMedia.cameraEnabled}
-            busy={busyControl === 'camera'}
-            disabled={connectionState !== 'connected' || busyControl != null}
-            onClick={() => void toggleMedia('camera')}
-            icon="📷"
-          />
-          <MediaButton
-            label={localMedia.screenShareEnabled ? 'Parar compartilhamento' : 'Compartilhar tela'}
-            active={localMedia.screenShareEnabled}
-            busy={busyControl === 'screen'}
-            disabled={connectionState !== 'connected' || busyControl != null}
-            onClick={() => void toggleMedia('screen')}
-            icon="▣"
-          />
-          <button
-            type="button"
-            onClick={onLeaveAction}
-            className="inline-flex min-w-32 items-center justify-center gap-2 rounded-xl border border-rose-400/25 bg-rose-500/15 px-4 py-2.5 text-sm font-medium text-rose-200 transition hover:bg-rose-500/25"
-          >
-            <span aria-hidden="true">↪</span>
-            Sair da chamada
-          </button>
-        </div>
-      </footer>
+      <CallControlDock
+        currentUser={currentUser}
+        roomTitle={target.title}
+        connectionState={connectionState}
+        localMedia={localMedia}
+        busyControl={busyControl}
+        onToggle={kind => void toggleMedia(kind)}
+        onLeave={onLeaveAction}
+      />
+
+      {expandedTrack && (
+        <ScreenShareViewer
+          view={expandedTrack}
+          onCloseAction={() => setExpandedTrackId(null)}
+          onErrorAction={message => setNotice(message)}
+        />
+      )}
 
       <div className="hidden" aria-hidden="true">
         {trackViews.audio.map(view => (
@@ -891,8 +893,9 @@ export function MediaRoom({
   );
 }
 
-function VideoTrackTile({ view }: { view: TrackView }) {
+function VideoTrackTile({ view, onExpand }: { view: TrackView; onExpand: () => void }) {
   const elementRef = useRef<HTMLVideoElement>(null);
+  const isScreenShare = view.source === Track.Source.ScreenShare;
 
   useEffect(() => {
     const element = elementRef.current;
@@ -904,15 +907,101 @@ function VideoTrackTile({ view }: { view: TrackView }) {
   }, [view.track]);
 
   return (
-    <figure className="relative min-h-56 overflow-hidden rounded-2xl border border-white/10 bg-slate-950 shadow-xl shadow-black/20">
+    <figure className={`group relative min-h-56 overflow-hidden rounded-2xl border bg-slate-950 shadow-xl shadow-black/20 ${isScreenShare ? 'border-violet-400/25' : 'border-white/10'}`}>
       <video ref={elementRef} autoPlay playsInline muted={view.local} className="h-full w-full object-contain" />
-      <figcaption className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-linear-to-t from-black/80 to-transparent px-3 pb-3 pt-8 text-xs">
+      {isScreenShare && (
+        <button
+          type="button"
+          onClick={onExpand}
+          className="absolute inset-0 z-10 grid place-items-center bg-black/0 transition hover:bg-black/35 focus-visible:bg-black/35"
+          aria-label={`Ampliar tela compartilhada por ${view.local ? 'você' : view.participantName}`}
+        >
+          <span className="translate-y-2 rounded-xl border border-white/15 bg-slate-950/85 px-4 py-2 text-sm font-semibold text-white opacity-0 shadow-xl backdrop-blur transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+            ⛶ Ampliar compartilhamento
+          </span>
+        </button>
+      )}
+      <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-2 bg-linear-to-t from-black/80 to-transparent px-3 pb-3 pt-8 text-xs">
         <span className="truncate font-medium">{view.local ? 'Você' : view.participantName}</span>
         <span className="rounded-full bg-black/50 px-2 py-1 text-slate-300">
-          {view.source === Track.Source.ScreenShare ? 'Tela' : 'Câmera'}
+          {isScreenShare ? 'Tela compartilhada' : 'Câmera'}
         </span>
       </figcaption>
     </figure>
+  );
+}
+
+export function ScreenShareViewer({
+  view,
+  onCloseAction,
+  onErrorAction,
+}: {
+  view: TrackView;
+  onCloseAction: () => void;
+  onErrorAction: (message: string) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    view.track.attach(video);
+    return () => {
+      view.track.detach(video);
+    };
+  }, [view.track]);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !document.fullscreenElement) onCloseAction();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onCloseAction]);
+
+  async function enterFullscreen() {
+    const container = containerRef.current;
+    if (!container?.requestFullscreen) {
+      onErrorAction('Este navegador não oferece modo de tela cheia para o compartilhamento.');
+      return;
+    }
+    try {
+      await container.requestFullscreen();
+    } catch {
+      onErrorAction('Não foi possível abrir o compartilhamento em tela cheia.');
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-70 flex flex-col bg-black/95 p-3 backdrop-blur-md sm:p-5" role="dialog" aria-modal="true" aria-label="Compartilhamento de tela ampliado">
+      <div className="mb-3 flex shrink-0 items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/90 px-4 py-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-white">Tela de {view.local ? 'você' : view.participantName}</p>
+          <p className="text-xs text-slate-500">Visualização ampliada</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void enterFullscreen()}
+            className="rounded-xl border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-100 transition hover:bg-violet-500/20"
+          >
+            ⛶ Tela cheia
+          </button>
+          <button
+            type="button"
+            onClick={onCloseAction}
+            className="grid h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-xl text-slate-300 transition hover:bg-white/10 hover:text-white"
+            aria-label="Fechar visualização ampliada"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-white/10 bg-black">
+        <video ref={videoRef} autoPlay playsInline muted={view.local} className="h-full w-full object-contain" />
+      </div>
+    </div>
   );
 }
 
@@ -966,7 +1055,75 @@ function DeviceSelect({
   );
 }
 
-function MediaButton({
+function CallControlDock({
+  currentUser,
+  roomTitle,
+  connectionState,
+  localMedia,
+  busyControl,
+  onToggle,
+  onLeave,
+}: {
+  currentUser: User;
+  roomTitle: string;
+  connectionState: ConnectionUiState;
+  localMedia: LocalMediaState;
+  busyControl: 'microphone' | 'camera' | 'screen' | null;
+  onToggle: (kind: 'microphone' | 'camera' | 'screen') => void;
+  onLeave: () => void;
+}) {
+  const disabled = connectionState !== 'connected' || busyControl != null;
+  return (
+    <section className="fixed bottom-0 left-16 z-40 w-[min(20rem,calc(100vw-4rem))] border-t border-white/10 bg-slate-950/96 p-3 shadow-[0_-12px_32px_rgba(0,0,0,0.35)] backdrop-blur md:w-72" aria-label="Controles da chamada">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-violet-500/20 text-xs font-bold text-violet-200" aria-hidden="true">
+          {currentUser.name.charAt(0).toUpperCase()}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs font-semibold text-white">{currentUser.name}</p>
+          <p className="truncate text-[10px] text-emerald-300">◉ {connectionLabel(connectionState)} em {roomTitle}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onLeave}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-rose-500/12 text-sm text-rose-300 transition hover:bg-rose-500/25"
+          aria-label="Sair da chamada"
+          title="Sair da chamada"
+        >
+          ↪
+        </button>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <CallControlButton
+          label={localMedia.microphoneEnabled ? 'Desligar microfone' : 'Ligar microfone'}
+          active={localMedia.microphoneEnabled}
+          busy={busyControl === 'microphone'}
+          disabled={disabled}
+          onClick={() => onToggle('microphone')}
+          icon={localMedia.microphoneEnabled ? '🎙' : '🔇'}
+        />
+        <CallControlButton
+          label={localMedia.cameraEnabled ? 'Desligar câmera' : 'Ligar câmera'}
+          active={localMedia.cameraEnabled}
+          busy={busyControl === 'camera'}
+          disabled={disabled}
+          onClick={() => onToggle('camera')}
+          icon="📷"
+        />
+        <CallControlButton
+          label={localMedia.screenShareEnabled ? 'Parar compartilhamento' : 'Compartilhar tela'}
+          active={localMedia.screenShareEnabled}
+          busy={busyControl === 'screen'}
+          disabled={disabled}
+          onClick={() => onToggle('screen')}
+          icon="▣"
+        />
+      </div>
+    </section>
+  );
+}
+
+function CallControlButton({
   label,
   active,
   busy,
@@ -986,11 +1143,12 @@ function MediaButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-label={label}
+      title={label}
       aria-pressed={active}
-      className={`inline-flex min-w-36 items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${active ? 'border-violet-400/35 bg-violet-500/20 text-violet-100 hover:bg-violet-500/30' : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'}`}
+      className={`grid h-9 place-items-center rounded-lg border text-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? 'border-violet-400/30 bg-violet-500/20 text-violet-100 hover:bg-violet-500/30' : 'border-white/8 bg-white/5 text-slate-300 hover:bg-white/10'}`}
     >
       <span aria-hidden="true">{busy ? '…' : icon}</span>
-      {label}
     </button>
   );
 }

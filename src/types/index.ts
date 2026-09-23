@@ -64,6 +64,44 @@ export interface ServerInvite {
     createdAt: string;
 }
 
+export interface ServerMember {
+    userId: string;
+    userName: string;
+    userEmail: string;
+    role: ServerRole;
+    joinedAt: string;
+}
+
+export interface FriendshipEvent {
+    type: 'friendship.request.created' | 'friendship.request.accepted' | 'friendship.request.rejected';
+    friendshipId: number;
+    requesterId: string;
+    requesterName: string;
+    addresseeId: string;
+    addresseeName: string;
+    status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+    createdAt: string;
+}
+
+export interface ServerInviteEvent {
+    type: 'server.invite.created' | 'server.invite.accepted';
+    inviteId: number;
+    serverId: string;
+    serverName: string;
+    inviterId: string;
+    inviterName: string;
+    inviteeId: string;
+    inviteeName: string;
+    status: 'PENDING' | 'ACCEPTED';
+    createdAt: string;
+}
+
+export interface ServerMemberEvent {
+    type: 'server.member.joined';
+    serverId: string;
+    member: ServerMember;
+}
+
 export interface ChannelMessage {
     id: number;
     channelId: string;

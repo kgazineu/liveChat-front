@@ -1,88 +1,121 @@
 'use client';
 
-import { useState } from 'react';
-import api from '@/src/services/api';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
+import AuthShell, {
+  authInputClassName,
+  authPrimaryButtonClassName,
+} from '@/src/components/auth-shell';
+import api from '@/src/services/api';
 import { errorMessage } from '@/src/services/errors';
 import { persistSession, type SessionResponse } from '@/src/services/session';
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
+
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail || !password) {
+      toast.error('Preencha seu email e sua senha.');
+      return;
+    }
+
     setLoading(true);
-
     const loadingToast = toast.loading('Entrando...');
 
     try {
-      const response = await api.post<SessionResponse>('/users/login', { email, password });
+      const response = await api.post<SessionResponse>('/users/login', {
+        email: normalizedEmail,
+        password,
+      });
       persistSession(response.data);
-
       toast.dismiss(loadingToast);
       toast.success('Bem-vindo de volta!');
-
       router.replace('/chat');
-
     } catch (error: unknown) {
       toast.dismiss(loadingToast);
-      console.error(error);
-
-      const message = errorMessage(error, 'Email ou senha inválidos');
-      toast.error(message);
-      
-      setLoading(false); 
+      toast.error(errorMessage(error, 'Email ou senha inválidos.'));
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-900 text-white">
-      <form onSubmit={handleLogin} className="w-full max-w-sm p-6 bg-gray-800 rounded-lg shadow-md">
-        <h2 className="mb-6 text-2xl font-bold text-center">Entrar no Chat</h2>
-
-        <div className="mb-4">
-          <label className="block mb-1 text-sm">Email</label>
-          <input
-            className="w-full p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-500"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
-
-        <div className="mb-6">
-          <label className="block mb-1 text-sm">Senha</label>
-          <input
-            className="w-full p-2 rounded bg-gray-700 border border-gray-600 focus:outline-none focus:border-blue-500"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
-
-        <button
-          type="submit"
-          disabled={loading}
-          className={`w-full p-2 font-bold rounded transition ${
-            loading 
-              ? 'bg-green-800 cursor-not-allowed text-gray-300' 
-              : 'bg-green-600 hover:bg-green-500 text-white'
-          }`}
-        >
-          {loading ? 'Entrando...' : 'Entrar'}
-        </button>
-
-        <p className="mt-4 text-center text-sm text-gray-400">
-          Não tem conta? <Link href="/register" className="text-blue-400 hover:underline">Cadastre-se</Link>
+    <AuthShell
+      eyebrow="Bem-vindo de volta"
+      title="Entre na sua conta"
+      description="Continue suas conversas e encontre sua comunidade."
+      footer={
+        <p className="text-center text-sm text-slate-400">
+          Ainda não tem conta?{' '}
+          <Link href="/register" className="font-semibold text-violet-300 transition hover:text-violet-200 hover:underline">
+            Cadastre-se
+          </Link>
         </p>
+      }
+    >
+      <form onSubmit={handleLogin} className="space-y-5">
+        <div>
+          <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-200">
+            Email
+          </label>
+          <input
+            id="email"
+            name="email"
+            className={authInputClassName}
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            placeholder="voce@exemplo.com"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            disabled={loading}
+            required
+          />
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-4">
+            <label htmlFor="password" className="text-sm font-medium text-slate-200">
+              Senha
+            </label>
+            <Link href="/forgot-password" className="text-xs font-medium text-cyan-300 transition hover:text-cyan-200 hover:underline">
+              Esqueci minha senha
+            </Link>
+          </div>
+          <input
+            id="password"
+            name="password"
+            className={authInputClassName}
+            type="password"
+            autoComplete="current-password"
+            placeholder="Digite sua senha"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            disabled={loading}
+            required
+          />
+        </div>
+
+        <button type="submit" disabled={loading} aria-busy={loading} className={authPrimaryButtonClassName}>
+          {loading ? (
+            <>
+              <span aria-hidden="true" className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              Entrando...
+            </>
+          ) : (
+            'Entrar no LiveChat'
+          )}
+        </button>
       </form>
-    </div>
+    </AuthShell>
   );
 }

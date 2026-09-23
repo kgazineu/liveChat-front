@@ -4,7 +4,7 @@ Cliente web do LiveChat, uma plataforma de comunicação em tempo real organizad
 
 ## Funcionalidades
 
-- cadastro, login e renovação automática por refresh token rotativo;
+- cadastro, login, recuperação segura de senha e renovação automática por refresh token rotativo;
 - amizades: busca, envio, aceite e rejeição de solicitações;
 - criação e listagem de servidores;
 - canais de texto e voz, com criação restrita ao proprietário;
@@ -12,9 +12,14 @@ Cliente web do LiveChat, uma plataforma de comunicação em tempo real organizad
 - canais privados 1:1 idempotentes;
 - mensagens persistidas por canal e atualização em tempo real por STOMP;
 - áudio, câmera e compartilhamento de tela por LiveKit;
+- visualização ampliada e fullscreen das telas compartilhadas;
+- controles compactos de chamada integrados ao painel lateral;
 - presença de mídia, fala ativa e estados de reconexão;
 - seleção de microfone, câmera e saída de áudio quando suportada pelo navegador;
-- métricas WebRTC de RTT, jitter, perda, bitrate e jitter buffer.
+- painel recolhível de métricas WebRTC: RTT, jitter, perda, bitrate e jitter buffer;
+- menu de configurações com atualização confirmada de nome/e-mail, troca de senha, logout e exclusão da conta;
+- sincronização social por filas STOMP privadas e reconciliação REST após cada conexão;
+- listagem autorizada dos membros de cada servidor.
 
 ## Pré-requisitos
 
@@ -34,6 +39,8 @@ BROKER_URL=ws://localhost:8080/ws
 ```
 
 Em páginas HTTPS, `API_URL` precisa usar `https://` e `BROKER_URL` precisa usar `wss://`. A URL do LiveKit não é configurada no frontend: ela é entregue pelo backend apenas na resposta autenticada de entrada em uma sessão de mídia.
+
+No backend, `FRONTEND_PASSWORD_RESET_URL` deve apontar para `/password-reset` e `FRONTEND_PROFILE_UPDATE_URL` para `/profile-update` neste frontend.
 
 ## Desenvolvimento
 
@@ -58,7 +65,10 @@ npm run build
 O cliente abre uma única conexão STOMP autenticada por sessão e assina:
 
 - `/user/queue/messages` para mensagens persistidas;
-- `/user/queue/media-presence` para entrada, saída e atualização de participantes.
+- `/user/queue/media-presence` para entrada, saída e atualização de participantes;
+- `/user/queue/friendships` para solicitações e mudanças de amizade;
+- `/user/queue/server-invites` para criação e aceite de convites;
+- `/user/queue/server-members` para novos membros de servidores.
 
 Áudio, câmera e tela não trafegam pelo backend Spring ou pelo STOMP. Depois do `POST .../media-sessions`, o cliente usa `connection.url` e `connection.token` para entrar na sala autorizada do LiveKit. A credencial fica apenas em memória e é descartada ao sair ou trocar de canal.
 
