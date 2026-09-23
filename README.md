@@ -1,36 +1,67 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LiveChat — frontend
 
-## Getting Started
+Cliente web do LiveChat, uma plataforma de comunicação em tempo real organizada em servidores, canais e conversas privadas 1:1. O projeto usa Next.js 16, React 19, STOMP/WebSocket e o SDK WebRTC do LiveKit.
 
-First, run the development server:
+## Funcionalidades
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- cadastro, login e renovação automática por refresh token rotativo;
+- amizades: busca, envio, aceite e rejeição de solicitações;
+- criação e listagem de servidores;
+- canais de texto e voz, com criação restrita ao proprietário;
+- convites direcionados a amigos e aceite explícito;
+- canais privados 1:1 idempotentes;
+- mensagens persistidas por canal e atualização em tempo real por STOMP;
+- áudio, câmera e compartilhamento de tela por LiveKit;
+- presença de mídia, fala ativa e estados de reconexão;
+- seleção de microfone, câmera e saída de áudio quando suportada pelo navegador;
+- métricas WebRTC de RTT, jitter, perda, bitrate e jitter buffer.
+
+## Pré-requisitos
+
+- Node.js `>=24 <25`;
+- npm `>=11 <12`;
+- API LiveChat em execução;
+- broker STOMP da API acessível;
+- LiveKit configurado no backend para usar chamadas.
+
+## Configuração
+
+A configuração é lida no servidor Next.js e exposta ao cliente por `/api/runtime-config`:
+
+```env
+API_URL=http://localhost:8080
+BROKER_URL=ws://localhost:8080/ws
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Em páginas HTTPS, `API_URL` precisa usar `https://` e `BROKER_URL` precisa usar `wss://`. A URL do LiveKit não é configurada no frontend: ela é entregue pelo backend apenas na resposta autenticada de entrada em uma sessão de mídia.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Desenvolvimento
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev
+```
 
-## Learn More
+Abra [http://localhost:3000](http://localhost:3000).
 
-To learn more about Next.js, take a look at the following resources:
+## Validação
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Contratos de tempo real
 
-## Deploy on Vercel
+O cliente abre uma única conexão STOMP autenticada por sessão e assina:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- `/user/queue/messages` para mensagens persistidas;
+- `/user/queue/media-presence` para entrada, saída e atualização de participantes.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Áudio, câmera e tela não trafegam pelo backend Spring ou pelo STOMP. Depois do `POST .../media-sessions`, o cliente usa `connection.url` e `connection.token` para entrar na sala autorizada do LiveKit. A credencial fica apenas em memória e é descartada ao sair ou trocar de canal.
+
+## Observações de produção
+
+Chamadas em produção dependem da infraestrutura do backend descrita em `IDEIA_DO_PROJETO.md`: LiveKit fora do modo de desenvolvimento, domínio/TLS, portas WebRTC, IP público e TURN para redes restritivas. Os testes unitários do frontend não substituem a validação real com 2 e 5 participantes nem os testes de fallback de rede.

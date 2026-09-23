@@ -5,9 +5,9 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '@/src/services/api';
 import { User, FriendRequest } from '@/src/types';
 import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
 import toast from 'react-hot-toast';
 import { errorMessage } from '@/src/services/errors';
+import { clearSession } from '@/src/services/session';
 
 interface SidebarProps {
     onUserSelected: (user: User) => void;
@@ -140,7 +140,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
     }
 
     function handleLogout() {
-        Cookies.remove('chat_token', { path: '/' });
+        clearSession();
         router.replace('/');
         toast.success('Você saiu do chat.');
     }
