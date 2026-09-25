@@ -390,7 +390,6 @@ export function MediaRoom({
   onSummaryAction,
   showMetrics = false,
   participantVolumes = {},
-  onParticipantVolumeChangeAction,
   devicePanelTarget = null,
 }: {
   currentUser: CurrentUser;
@@ -401,7 +400,6 @@ export function MediaRoom({
   onSummaryAction?: (summary: MediaRoomSummary) => void;
   showMetrics?: boolean;
   participantVolumes?: Record<string, number>;
-  onParticipantVolumeChangeAction?: (userId: string, volume: number) => void;
   devicePanelTarget?: HTMLElement | null;
 }) {
   const { connected: realtimeConnected, subscribePresence } = useRealtime();
@@ -426,7 +424,6 @@ export function MediaRoom({
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<WebRtcMetrics>(EMPTY_METRICS);
   const [expandedTrackId, setExpandedTrackId] = useState<string | null>(null);
-  const [expandedVolumeUserId, setExpandedVolumeUserId] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -942,82 +939,6 @@ export function MediaRoom({
           )}
 
           {showMetrics && <MetricsPanel metrics={metrics} />}
-
-          <section className="mt-5 rounded-2xl border border-white/8 bg-black/10 p-4" aria-labelledby="call-participants-title">
-            <div className="flex items-center justify-between gap-3">
-              <h2 id="call-participants-title" className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Participantes da chamada
-              </h2>
-              <span className="text-xs text-slate-500">{visibleSessions.length} conectados</span>
-            </div>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              {(connectionState === 'loading' || connectionState === 'connecting') && visibleSessions.length === 0 && (
-                <p className="rounded-xl bg-white/5 px-3 py-4 text-center text-sm text-slate-400 md:col-span-2">Carregando presença…</p>
-              )}
-              {visibleSessions.map(session => {
-                const userId = String(session.userId);
-                const mine = userId === String(currentUser.id);
-                const volume = participantVolumes[userId] ?? storedParticipantVolume(userId);
-                const volumeExpanded = target.kind === 'DIRECT' && expandedVolumeUserId === userId;
-                return (
-                  <article
-                    key={session.userId}
-                    className="flex min-w-0 items-center gap-3 rounded-xl border border-white/5 bg-white/3 px-3 py-2.5"
-                  >
-                    <div className="relative shrink-0">
-                      <div className="grid h-9 w-9 place-items-center rounded-full bg-violet-500/20 text-sm font-semibold text-violet-200">
-                        {session.userName.charAt(0).toUpperCase()}
-                      </div>
-                      <span
-                        className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-900 bg-slate-600"
-                        aria-label={`${session.userName} está conectado`}
-                      />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <strong className="truncate text-sm">{mine ? 'Você' : session.userName}</strong>
-                        <div className="flex shrink-0 items-center gap-1 text-xs text-slate-400" aria-label="Estado de mídia">
-                          <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>{session.microphoneEnabled ? '🎙' : '🔇'}</span>
-                          {session.cameraEnabled && <span title="Câmera ligada">📷</span>}
-                          {session.screenShareEnabled && <span title="Compartilhando tela">▣</span>}
-                          {!mine && target.kind === 'DIRECT' && (
-                            <button
-                              type="button"
-                              onClick={() => setExpandedVolumeUserId(current => current === userId ? null : userId)}
-                              className="ml-1 rounded-md px-1.5 py-0.5 text-slate-500 transition hover:bg-white/7 hover:text-violet-200"
-                              aria-label={`Regular volume de ${session.userName}`}
-                              aria-expanded={volumeExpanded}
-                            >
-                              🔊
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                      {mine ? (
-                        <p className="mt-1 text-[11px] text-slate-500">{sessionStatusLabel(session.status)}</p>
-                      ) : volumeExpanded ? (
-                        <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
-                          <span className="shrink-0">Volume</span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.05"
-                            value={volume}
-                            onChange={event => onParticipantVolumeChangeAction?.(userId, Number(event.currentTarget.value))}
-                            className="h-1 min-w-0 flex-1 accent-violet-400"
-                            aria-label={`Volume de ${session.userName}`}
-                          />
-                          <span className="w-8 text-right">{Math.round(volume * 100)}%</span>
-                        </label>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-
       </main>
         </section>
       )}
@@ -1453,13 +1374,4 @@ function connectionBadgeClass(state: ConnectionUiState) {
     return 'border-amber-400/20 bg-amber-400/10 text-amber-300';
   }
   return 'border-rose-400/20 bg-rose-400/10 text-rose-300';
-}
-
-function sessionStatusLabel(status: MediaSessionStatus) {
-  const labels: Record<MediaSessionStatus, string> = {
-    CONNECTING: 'Conectando',
-    ACTIVE: 'Na sala',
-    RECONNECTING: 'Reconectando',
-  };
-  return labels[status];
 }
