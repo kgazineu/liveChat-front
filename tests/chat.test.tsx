@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import ChatWindow from '@/src/components/chatWindow';
-import type { Message, User } from '@/src/types';
+import type { CurrentUser, Message, User } from '@/src/types';
 import type { Client } from '@stomp/stompjs';
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), clients: [] as unknown[], publish: vi.fn(), error: vi.fn() }));
@@ -18,11 +18,11 @@ vi.mock('@stomp/stompjs', () => ({ Client: class {
   constructor() { mocks.clients.push(this); }
 } }));
 
-const me: User = { id: '1', name: 'Eu', email: 'me@example.invalid' };
-const friend: User = { id: '2', name: 'Amigo', email: 'friend@example.invalid' };
-const another: User = { id: '3', name: 'Outro', email: 'other@example.invalid' };
+const me: CurrentUser = { id: '1', name: 'Eu', email: 'me@example.invalid' };
+const friend: User = { id: '2', name: 'Amigo' };
+const another: User = { id: '3', name: 'Outro' };
 function message(id: number, content: string): Message {
-  return { id, content, senderId: '2', senderEmail: friend.email, senderName: friend.name, receiverId: '1', receiverEmail: me.email, timestamp: `2026-09-05T12:00:0${id}Z` };
+  return { id, content, senderId: '2', senderName: friend.name, receiverId: '1', timestamp: `2026-09-05T12:00:0${id}Z` };
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;

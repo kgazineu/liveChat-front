@@ -7,6 +7,7 @@ import { RealtimeProvider, useRealtime } from '@/src/components/realtime-provide
 
 const mocks = vi.hoisted(() => ({
   clients: [] as unknown[],
+  message: vi.fn(),
   friendship: vi.fn(),
   invite: vi.fn(),
   member: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('@/src/services/runtime-config', () => ({
 vi.mock('@/src/services/api', () => ({ default: { get: mocks.apiGet } }));
 vi.mock('react-hot-toast', () => ({ default: { error: vi.fn() } }));
 vi.mock('@stomp/stompjs', () => ({
+  ReconnectionTimeMode: { EXPONENTIAL: 'EXPONENTIAL' },
   Client: class {
     connected = true;
     activate = vi.fn();
@@ -37,16 +39,18 @@ vi.mock('@stomp/stompjs', () => ({
 function Probe() {
   const realtime = useRealtime();
   useEffect(() => {
+    const message = realtime.subscribeMessages(mocks.message);
     const first = realtime.subscribeFriendships(mocks.friendship);
     const second = realtime.subscribeServerInvites(mocks.invite);
     const third = realtime.subscribeServerMembers(mocks.member);
-    return () => { first(); second(); third(); };
+    return () => { message(); first(); second(); third(); };
   }, [realtime]);
   return <span>{realtime.connected ? `conectado-${realtime.connectionRevision}` : 'desconectado'}</span>;
 }
 
 beforeEach(() => {
   mocks.clients.length = 0;
+  mocks.message.mockReset();
   mocks.friendship.mockReset();
   mocks.invite.mockReset();
   mocks.member.mockReset();
@@ -85,5 +89,30 @@ it('assina todas as filas antes de publicar a revisão e entrega eventos sociais
   expect(mocks.friendship).toHaveBeenCalledWith(expect.objectContaining({
     type: 'friendship.request.created',
     friendshipId: 10,
+  }));
+
+  const messageCallback = vi.mocked(client.subscribe).mock.calls.find(call => call[0] === '/user/queue/messages')![1];
+  act(() => messageCallback({ body: JSON.stringify({
+    id: 20,
+    channelId: 'channel-1',
+    content: '',
+    authorId: 'user-1',
+    authorName: 'Ana',
+    createdAt: '2026-09-25T20:00:00Z',
+    attachments: [{
+      id: 'attachment-1',
+      originalName: 'foto.png',
+      contentType: 'image/png',
+      size: 100,
+      width: 10,
+      height: 10,
+      downloadUrl: 'https://cdn.example/foto.png',
+      downloadExpiresAt: '2026-09-25T20:05:00Z',
+    }],
+  }) } as never));
+
+  expect(mocks.message).toHaveBeenCalledWith(expect.objectContaining({
+    id: 20,
+    attachments: [expect.objectContaining({ id: 'attachment-1' })],
   }));
 });

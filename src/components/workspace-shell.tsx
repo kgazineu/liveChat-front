@@ -14,10 +14,14 @@ import toast from 'react-hot-toast';
 import api from '@/src/services/api';
 import { errorMessage } from '@/src/services/errors';
 import { clearSession } from '@/src/services/session';
+import { fetchAllPages } from '@/src/services/pagination';
 import type {
   ChannelType,
+  CurrentUser,
   DirectChannel,
   FriendRequest,
+  MediaPresenceEvent,
+  MediaSession,
   MediaTarget,
   ServerChannel,
   ServerInvite,
@@ -26,7 +30,7 @@ import type {
   TextTarget,
   User,
 } from '@/src/types';
-import { MediaRoom, prepareCallSounds } from './media-room';
+import { MediaRoom, prepareCallSounds, type MediaRoomSummary } from './media-room';
 import MessagePanel from './message-panel';
 import { RealtimeProvider, useRealtime } from './realtime-provider';
 
@@ -53,8 +57,7 @@ function sortedByName<T extends { name: string }>(items: T[]) {
 function isUser(value: unknown): value is User {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<User>;
-  return typeof candidate.id === 'string' && typeof candidate.name === 'string' &&
-    typeof candidate.email === 'string';
+  return typeof candidate.id === 'string' && typeof candidate.name === 'string';
 }
 
 function userFromSearch(value: unknown): User | null {
@@ -70,7 +73,34 @@ function isDirectChannel(value: unknown): value is DirectChannel {
     typeof candidate.participantName === 'string';
 }
 
-export default function WorkspaceShell({ currentUser }: { currentUser: User }) {
+function safeMediaSession(session: MediaSession): MediaSession {
+  const { connection: _discarded, ...safeSession } = session;
+  void _discarded;
+  return safeSession;
+}
+
+function mergeVoiceSessions(...groups: MediaSession[][]) {
+  const sessions = new Map<string, MediaSession>();
+  for (const session of groups.flat()) {
+    const safeSession = safeMediaSession(session);
+    const userId = String(safeSession.userId);
+    const previous = sessions.get(userId);
+    const previousTime = previous ? Date.parse(previous.lastSeenAt) : Number.NEGATIVE_INFINITY;
+    const nextTime = Date.parse(safeSession.lastSeenAt);
+    if (!previous || !Number.isFinite(previousTime) || !Number.isFinite(nextTime) || nextTime >= previousTime) {
+      sessions.set(userId, safeSession);
+    }
+  }
+  return [...sessions.values()].sort((first, second) =>
+    Date.parse(first.joinedAt) - Date.parse(second.joinedAt) ||
+    first.userName.localeCompare(second.userName, 'pt-BR'));
+}
+
+function belongsToServerVoice(event: MediaPresenceEvent) {
+  return event.participant.channelKind === 'SERVER_VOICE' && event.participant.serverId != null;
+}
+
+export default function WorkspaceShell({ currentUser }: { currentUser: CurrentUser }) {
   return (
     <RealtimeProvider>
       <Workspace currentUser={currentUser} />
@@ -78,16 +108,19 @@ export default function WorkspaceShell({ currentUser }: { currentUser: User }) {
   );
 }
 
-function Workspace({ currentUser }: { currentUser: User }) {
+function Workspace({ currentUser }: { currentUser: CurrentUser }) {
   const router = useRouter();
   const {
     connectionRevision,
     subscribeFriendships,
+    subscribePresence,
     subscribeServerInvites,
     subscribeServerMembers,
   } = useRealtime();
   const channelsRequestRef = useRef(0);
   const membersRequestRef = useRef(0);
+  const voicePresenceRequestRef = useRef(0);
+  const voicePresenceTombstonesRef = useRef(new Map<string, Set<string>>());
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [channels, setChannels] = useState<ServerChannel[]>([]);
   const [members, setMembers] = useState<ServerMember[]>([]);
@@ -95,6 +128,8 @@ function Workspace({ currentUser }: { currentUser: User }) {
   const [requests, setRequests] = useState<FriendRequest[]>([]);
   const [invites, setInvites] = useState<ServerInvite[]>([]);
   const [directChannels, setDirectChannels] = useState<DirectChannel[]>([]);
+  const [voiceSessionsByChannel, setVoiceSessionsByChannel] = useState<Record<string, MediaSession[]>>({});
+  const [speakingUserIds, setSpeakingUserIds] = useState<string[]>([]);
 
   const [serversLoading, setServersLoading] = useState(true);
   const [communityLoading, setCommunityLoading] = useState(true);
@@ -146,18 +181,17 @@ function Workspace({ currentUser }: { currentUser: User }) {
     setCommunityLoading(true);
     setCommunityError(null);
     try {
-      const [friendsResponse, requestsResponse, invitesResponse, directsResponse] = await Promise.all([
-        api.get<User[]>('/friendships'),
-        api.get<FriendRequest[]>('/friendships/requests'),
+      const [friendsPage, requestsPage, invitesResponse, directsResponse] = await Promise.all([
+        fetchAllPages<User>('/friendships'),
+        fetchAllPages<FriendRequest>('/friendships/requests'),
         api.get<ServerInvite[]>('/servers/invites'),
         api.get<DirectChannel[]>('/direct-channels'),
       ]);
-      if (!Array.isArray(friendsResponse.data) || !Array.isArray(requestsResponse.data) ||
-        !Array.isArray(invitesResponse.data) || !Array.isArray(directsResponse.data)) {
+      if (!Array.isArray(invitesResponse.data) || !Array.isArray(directsResponse.data)) {
         throw new Error('Dados da comunidade inválidos');
       }
-      setFriends(friendsResponse.data);
-      setRequests(requestsResponse.data);
+      setFriends(friendsPage);
+      setRequests(requestsPage);
       setInvites(invitesResponse.data);
       setDirectChannels(directsResponse.data);
       return { directChannels: directsResponse.data };
@@ -169,17 +203,56 @@ function Workspace({ currentUser }: { currentUser: User }) {
     }
   }, []);
 
+  const loadVoicePresence = useCallback(async (serverId: string, serverChannels: ServerChannel[]) => {
+    const requestId = ++voicePresenceRequestRef.current;
+    const voiceChannels = serverChannels.filter(channel => channel.type === 'VOICE');
+    voiceChannels.forEach(channel => voicePresenceTombstonesRef.current.set(channel.id, new Set()));
+    setVoiceSessionsByChannel(previous => Object.fromEntries(
+      voiceChannels.map(channel => [channel.id, previous[channel.id] ?? []]),
+    ));
+    if (voiceChannels.length === 0) return;
+
+    const snapshots = await Promise.all(voiceChannels.map(async channel => {
+      try {
+        const response = await api.get<MediaSession[]>(`/servers/${serverId}/channels/${channel.id}/media-sessions`);
+        if (!Array.isArray(response.data)) throw new Error('Lista de participantes inválida');
+        return { channelId: channel.id, sessions: response.data, failed: false, error: null };
+      } catch (error) {
+        return { channelId: channel.id, sessions: [] as MediaSession[], failed: true, error };
+      }
+    }));
+    if (requestId !== voicePresenceRequestRef.current) return;
+
+    const failedSnapshot = snapshots.find(snapshot => snapshot.failed);
+    if (failedSnapshot) {
+      toast.error(errorMessage(failedSnapshot.error, 'Não foi possível atualizar todos os participantes dos canais de voz.'));
+    }
+    setVoiceSessionsByChannel(previous => {
+      const next: Record<string, MediaSession[]> = {};
+      for (const snapshot of snapshots) {
+        const tombstones = voicePresenceTombstonesRef.current.get(snapshot.channelId);
+        const sessions = snapshot.sessions
+          .filter(session => session.channelKind === 'SERVER_VOICE' && String(session.serverId) === String(serverId))
+          .filter(session => !tombstones?.has(String(session.userId)));
+        next[snapshot.channelId] = snapshot.failed
+          ? previous[snapshot.channelId] ?? []
+          : mergeVoiceSessions(previous[snapshot.channelId] ?? [], sessions);
+      }
+      return next;
+    });
+  }, []);
+
   const loadChannels = useCallback(async (serverId: string) => {
     const requestId = ++channelsRequestRef.current;
     setChannelsLoading(true);
     setChannelsError(null);
     setChannels([]);
     try {
-      const response = await api.get<ServerChannel[]>(`/servers/${serverId}/channels`);
-      if (!Array.isArray(response.data)) throw new Error('Lista de canais inválida');
+      const page = await fetchAllPages<ServerChannel>(`/servers/${serverId}/channels`);
       if (requestId !== channelsRequestRef.current) return null;
-      setChannels(response.data);
-      return response.data;
+      setChannels(page);
+      void loadVoicePresence(serverId, page);
+      return page;
     } catch (error) {
       if (requestId === channelsRequestRef.current) {
         setChannelsError(errorMessage(error, 'Não foi possível carregar os canais.'));
@@ -188,18 +261,17 @@ function Workspace({ currentUser }: { currentUser: User }) {
     } finally {
       if (requestId === channelsRequestRef.current) setChannelsLoading(false);
     }
-  }, []);
+  }, [loadVoicePresence]);
 
   const loadMembers = useCallback(async (serverId: string) => {
     const requestId = ++membersRequestRef.current;
     setMembersLoading(true);
     setMembers([]);
     try {
-      const response = await api.get<ServerMember[]>(`/servers/${serverId}/members`);
-      if (!Array.isArray(response.data)) throw new Error('Lista de membros inválida');
+      const page = await fetchAllPages<ServerMember>(`/servers/${serverId}/members`);
       if (requestId !== membersRequestRef.current) return null;
-      setMembers(response.data);
-      return response.data;
+      setMembers(page);
+      return page;
     } catch (error) {
       if (requestId === membersRequestRef.current) {
         toast.error(errorMessage(error, 'Não foi possível carregar os membros do servidor.'));
@@ -209,6 +281,35 @@ function Workspace({ currentUser }: { currentUser: User }) {
       if (requestId === membersRequestRef.current) setMembersLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const unsubscribePresence = subscribePresence(event => {
+      if (!belongsToServerVoice(event)) return;
+      const channelId = String(event.participant.channelId);
+      const userId = String(event.participant.userId);
+      let tombstones = voicePresenceTombstonesRef.current.get(channelId);
+      if (!tombstones) {
+        tombstones = new Set<string>();
+        voicePresenceTombstonesRef.current.set(channelId, tombstones);
+      }
+
+      if (event.type === 'media.participant.left') {
+        tombstones.add(userId);
+        setVoiceSessionsByChannel(previous => ({
+          ...previous,
+          [channelId]: (previous[channelId] ?? []).filter(session => String(session.userId) !== userId),
+        }));
+        return;
+      }
+
+      tombstones.delete(userId);
+      setVoiceSessionsByChannel(previous => ({
+        ...previous,
+        [channelId]: mergeVoiceSessions(previous[channelId] ?? [], [event.participant]),
+      }));
+    });
+    return unsubscribePresence;
+  }, [subscribePresence]);
 
   useEffect(() => {
     let active = true;
@@ -277,9 +378,12 @@ function Workspace({ currentUser }: { currentUser: User }) {
   function showHome(view: HomeView = 'friends') {
     channelsRequestRef.current += 1;
     membersRequestRef.current += 1;
+    voicePresenceRequestRef.current += 1;
     setChannelsLoading(false);
     setMembersLoading(false);
     setMembers([]);
+    setVoiceSessionsByChannel({});
+    setSpeakingUserIds([]);
     setActiveServerId(null);
     setSelectedTarget(null);
     setHomeView(view);
@@ -287,6 +391,9 @@ function Workspace({ currentUser }: { currentUser: User }) {
   }
 
   function showServer(server: ServerSummary) {
+    voicePresenceRequestRef.current += 1;
+    setVoiceSessionsByChannel({});
+    setSpeakingUserIds([]);
     setActiveServerId(server.id);
     setSelectedTarget(null);
     setMobileSidebarOpen(true);
@@ -308,6 +415,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
           channelId: channel.id,
           title: channel.name,
         };
+        setSpeakingUserIds([]);
         setActiveMediaTarget(mediaTarget);
         setSelectedTarget(mediaTarget);
       }
@@ -578,6 +686,21 @@ function Workspace({ currentUser }: { currentUser: User }) {
     setMobileSidebarOpen(false);
   }
 
+  const handleMediaSummary = useCallback((summary: MediaRoomSummary) => {
+    if (!activeMediaTarget || activeMediaTarget.kind !== 'SERVER_VOICE') {
+      setSpeakingUserIds([]);
+      return;
+    }
+    const channelId = activeMediaTarget.channelId;
+    setVoiceSessionsByChannel(previous => ({
+      ...previous,
+      [channelId]: mergeVoiceSessions(
+        summary.sessions.filter(session => session.channelKind === 'SERVER_VOICE' && session.channelId === channelId),
+      ),
+    }));
+    setSpeakingUserIds(summary.speakingUserIds.map(String));
+  }, [activeMediaTarget]);
+
   function leaveActiveMedia() {
     if (!activeMediaTarget) return;
     if (selectedTarget?.kind === 'DIRECT_CALL' && activeMediaTarget.kind === 'DIRECT' &&
@@ -592,6 +715,14 @@ function Workspace({ currentUser }: { currentUser: User }) {
       selectedTarget.channelId === activeMediaTarget.channelId) {
       setSelectedTarget(null);
     }
+    if (activeMediaTarget.kind === 'SERVER_VOICE') {
+      const channelId = activeMediaTarget.channelId;
+      setVoiceSessionsByChannel(previous => ({
+        ...previous,
+        [channelId]: (previous[channelId] ?? []).filter(session => String(session.userId) !== String(currentUser.id)),
+      }));
+    }
+    setSpeakingUserIds([]);
     setActiveMediaTarget(null);
   }
 
@@ -657,7 +788,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
         />
       )}
 
-      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} ${mediaActive ? 'pb-28' : ''} fixed inset-y-0 left-16 z-30 w-[min(20rem,calc(100vw-4rem))] flex-col border-r border-white/7 bg-slate-900 shadow-2xl md:static md:z-auto md:flex md:w-72 md:shrink-0 md:shadow-none`}>
+      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} ${mediaActive ? 'pb-40' : ''} fixed inset-y-0 left-16 z-30 w-[min(20rem,calc(100vw-4rem))] flex-col border-r border-white/7 bg-slate-900 shadow-2xl md:static md:z-auto md:flex md:w-72 md:shrink-0 md:shadow-none`}>
         {activeServer ? (
           <ServerSidebar
             server={activeServer}
@@ -665,8 +796,9 @@ function Workspace({ currentUser }: { currentUser: User }) {
             channelsError={channelsError}
             textChannels={textChannels}
             voiceChannels={voiceChannels}
-            members={members}
-            membersLoading={membersLoading}
+            voiceSessionsByChannel={voiceSessionsByChannel}
+            speakingUserIds={speakingUserIds}
+            currentUserId={currentUser.id}
             selectedTarget={selectedTarget}
             activeMediaTarget={activeMediaTarget}
             onSelectChannel={selectServerChannel}
@@ -765,9 +897,21 @@ function Workspace({ currentUser }: { currentUser: User }) {
             visible={showingActiveMedia}
             onOpenAction={openActiveMedia}
             onLeaveAction={leaveActiveMedia}
+            onSummaryAction={handleMediaSummary}
           />
         )}
       </main>
+
+      {activeServer && (
+        <ServerMembersPanel
+          key={activeServer.id}
+          server={activeServer}
+          currentUserId={currentUser.id}
+          members={members}
+          loading={membersLoading}
+          friends={friends}
+        />
+      )}
 
       {modal === 'server' && (
         <Modal title="Criar servidor" description="Crie um novo espaço para sua comunidade." onClose={() => setModal(null)}>
@@ -834,7 +978,7 @@ function Workspace({ currentUser }: { currentUser: User }) {
               >
                 <option value="">Selecione um amigo</option>
                 {orderedFriends.map(friend => (
-                  <option key={friend.id} value={friend.id}>{friend.name} — {friend.email}</option>
+                  <option key={friend.id} value={friend.id}>{friend.name}</option>
                 ))}
               </select>
             </Field>
@@ -1029,8 +1173,9 @@ function ServerSidebar({
   channelsError,
   textChannels,
   voiceChannels,
-  members,
-  membersLoading,
+  voiceSessionsByChannel,
+  speakingUserIds,
+  currentUserId,
   selectedTarget,
   activeMediaTarget,
   onSelectChannel,
@@ -1044,8 +1189,9 @@ function ServerSidebar({
   channelsError: string | null;
   textChannels: ServerChannel[];
   voiceChannels: ServerChannel[];
-  members: ServerMember[];
-  membersLoading: boolean;
+  voiceSessionsByChannel: Record<string, MediaSession[]>;
+  speakingUserIds: string[];
+  currentUserId: string;
   selectedTarget: SelectedTarget | null;
   activeMediaTarget: MediaTarget | null;
   onSelectChannel: (channel: ServerChannel) => void;
@@ -1093,32 +1239,142 @@ function ServerSidebar({
         {!channelsLoading && !channelsError && voiceChannels.length > 0 && (
           <ChannelGroup title="Canais de voz">
             {voiceChannels.map(channel => (
-              <ChannelButton
-                key={channel.id}
-                label={channel.name}
-                icon={activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id ? '◉' : '◖'}
-                active={(selectedTarget?.kind === 'SERVER_VOICE' && selectedTarget.channelId === channel.id) ||
-                  (activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id)}
-                onClick={() => onSelectChannel(channel)}
-              />
+              <div key={channel.id}>
+                <ChannelButton
+                  label={channel.name}
+                  icon={activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id ? '◉' : '◖'}
+                  active={(selectedTarget?.kind === 'SERVER_VOICE' && selectedTarget.channelId === channel.id) ||
+                    (activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id)}
+                  onClick={() => onSelectChannel(channel)}
+                />
+                {(voiceSessionsByChannel[channel.id] ?? []).map(session => {
+                  const speaking = activeMediaTarget?.kind === 'SERVER_VOICE' &&
+                    activeMediaTarget.channelId === channel.id &&
+                    speakingUserIds.includes(String(session.userId));
+                  return (
+                    <div key={session.userId} className="ml-7 flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-slate-400">
+                      <div className="relative shrink-0">
+                        <Avatar name={session.userName} small />
+                        <span
+                          className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-slate-900 ${speaking ? 'bg-emerald-400' : 'bg-slate-600'}`}
+                          aria-label={speaking ? `${session.userName} está falando` : `${session.userName} não está falando`}
+                        />
+                      </div>
+                      <span className={`min-w-0 flex-1 truncate ${speaking ? 'text-emerald-200' : 'text-slate-400'}`}>
+                        {String(session.userId) === String(currentUserId) ? 'Você' : session.userName}
+                      </span>
+                      <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>
+                        {session.microphoneEnabled ? '🎙' : '🔇'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             ))}
           </ChannelGroup>
         )}
-        <ChannelGroup title={`Membros — ${members.length}`}>
-          {membersLoading && <p className="px-2 py-2 text-xs text-slate-500">Atualizando membros…</p>}
-          {!membersLoading && members.map(member => (
-            <div key={member.userId} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-slate-400">
-              <Avatar name={member.userName} small />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium text-slate-300">{member.userName}</p>
-                <p className="text-[10px] text-slate-600">{member.role === 'OWNER' ? 'Proprietário' : 'Membro'}</p>
-              </div>
-            </div>
-          ))}
-          {!membersLoading && members.length === 0 && <p className="px-2 py-2 text-xs text-slate-600">Nenhum membro disponível.</p>}
-        </ChannelGroup>
+
       </div>
     </>
+  );
+}
+
+function ServerMembersPanel({
+  server,
+  currentUserId,
+  members,
+  loading,
+  friends,
+}: {
+  server: ServerSummary;
+  currentUserId: string;
+  members: ServerMember[];
+  loading: boolean;
+  friends: User[];
+}) {
+  const [selectedMember, setSelectedMember] = useState<ServerMember | null>(null);
+  const [sendingToId, setSendingToId] = useState<string | null>(null);
+  const [sentRequests, setSentRequests] = useState<Set<string>>(new Set());
+  const friendIds = useMemo(() => new Set(friends.map(friend => String(friend.id))), [friends]);
+
+  async function addFriend(member: ServerMember) {
+    const userId = String(member.userId);
+    if (userId === String(currentUserId) || friendIds.has(userId) || sentRequests.has(userId) || sendingToId) return;
+    setSendingToId(userId);
+    try {
+      await api.post('/friendships/send', { targetUserId: member.userId });
+      setSentRequests(previous => new Set(previous).add(userId));
+      toast.success(`Solicitação enviada para ${member.userName}.`);
+    } catch (error) {
+      toast.error(errorMessage(error, 'Não foi possível enviar a solicitação de amizade.'));
+    } finally {
+      setSendingToId(null);
+    }
+  }
+
+  return (
+    <aside className="hidden w-64 shrink-0 flex-col border-l border-white/7 bg-slate-900 xl:flex" aria-label={`Membros de ${server.name}`}>
+      <header className="border-b border-white/7 px-4 py-5">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Membros — {members.length}</h2>
+        <p className="mt-1 truncate text-xs text-slate-600">{server.name}</p>
+      </header>
+
+      {selectedMember && (
+        <section className="border-b border-white/7 p-4" aria-label={`Detalhes de ${selectedMember.userName}`}>
+          <div className="flex items-center gap-3">
+            <Avatar name={selectedMember.userName} />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-white">{selectedMember.userName}</p>
+              <p className="text-xs text-slate-500">{selectedMember.role === 'OWNER' ? 'Proprietário' : 'Membro'}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedMember(null)}
+              className="grid h-7 w-7 place-items-center rounded-lg text-slate-500 transition hover:bg-white/7 hover:text-white"
+              aria-label="Fechar detalhes do membro"
+            >
+              ×
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => void addFriend(selectedMember)}
+            disabled={String(selectedMember.userId) === String(currentUserId) || friendIds.has(String(selectedMember.userId)) || sentRequests.has(String(selectedMember.userId)) || sendingToId !== null}
+            className={`${primaryButtonClass} mt-4 w-full text-xs`}
+          >
+            {String(selectedMember.userId) === String(currentUserId)
+              ? 'Este é você'
+              : friendIds.has(String(selectedMember.userId))
+                ? 'Já é seu amigo'
+                : sentRequests.has(String(selectedMember.userId))
+                  ? 'Solicitação enviada'
+                  : sendingToId === String(selectedMember.userId)
+                    ? 'Enviando…'
+                    : 'Adicionar amigo'}
+          </button>
+        </section>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {loading && <p className="px-2 py-3 text-xs text-slate-500">Atualizando membros…</p>}
+        {!loading && members.map(member => (
+          <button
+            key={member.userId}
+            type="button"
+            onClick={() => setSelectedMember(member)}
+            className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition ${selectedMember?.userId === member.userId ? 'bg-violet-500/12 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
+            aria-label={`Ver ${member.userName}`}
+          >
+            <Avatar name={member.userName} small />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium">{String(member.userId) === String(currentUserId) ? `${member.userName} (você)` : member.userName}</p>
+              <p className="text-[10px] text-slate-600">{member.role === 'OWNER' ? 'Proprietário' : 'Membro'}</p>
+            </div>
+          </button>
+        ))}
+        {!loading && members.length === 0 && <p className="px-2 py-3 text-xs text-slate-600">Nenhum membro disponível.</p>}
+      </div>
+    </aside>
   );
 }
 
@@ -1148,7 +1404,7 @@ function HomeSidebar({
   onRetry,
   onClose,
 }: {
-  currentUser: User;
+  currentUser: CurrentUser;
   view: HomeView;
   friends: User[];
   directs: DirectChannel[];
@@ -1223,7 +1479,7 @@ function HomeSidebar({
                   <Avatar name={foundUser.name} small />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-white">{foundUser.name}</p>
-                    <p className="truncate text-xs text-slate-400">{foundUser.email}</p>
+                    <p className="truncate text-xs text-slate-400">Usuário encontrado</p>
                   </div>
                 </div>
                 <button type="button" onClick={onSendRequest} disabled={busyAction !== null || foundUser.id === currentUser.id} className={`${primaryButtonClass} mt-3 w-full`}>
@@ -1238,7 +1494,7 @@ function HomeSidebar({
               <PersonButton
                 key={friend.id}
                 name={friend.name}
-                detail={friend.email}
+                detail="Amigo"
                 busy={busyAction === `direct-${friend.id}`}
                 onClick={() => onFriend(friend)}
               />
@@ -1313,7 +1569,7 @@ function HomeWelcome({
   invitesCount,
   onNavigate,
 }: {
-  currentUser: User;
+  currentUser: CurrentUser;
   friendsCount: number;
   requestsCount: number;
   invitesCount: number;

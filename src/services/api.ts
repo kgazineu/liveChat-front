@@ -2,12 +2,14 @@ import axios, { type InternalAxiosRequestConfig } from 'axios';
 import Cookies from 'js-cookie';
 import { getRuntimeConfig } from './runtime-config';
 import { clearSession, persistSession, type SessionResponse } from './session';
+import { enforceRateLimitCooldown, registerRateLimit } from './rate-limit';
 
 const api = axios.create({
     timeout: 15000,
 });
 
 api.interceptors.request.use(async (config) => {
+    enforceRateLimitCooldown(config);
     config.baseURL = (await getRuntimeConfig()).apiUrl;
     const token = Cookies.get('chat_token');
     if (token && !isPublicAuthRequest(config.url)) {
@@ -44,6 +46,11 @@ api.interceptors.response.use(
     response => response,
     async error => {
         const config = error.config as RetryableRequest | undefined;
+        if (error.response?.status === 429) {
+            registerRateLimit(config, error.response.headers);
+            return Promise.reject(error);
+        }
+
         const protectedRequest = config && !isPublicAuthRequest(config.url);
         if (error.response?.status !== 401 || !protectedRequest) return Promise.reject(error);
 

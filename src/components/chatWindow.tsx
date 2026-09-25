@@ -69,7 +69,7 @@ export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProp
                         if (!message) { toast.error('Mensagem recebida em formato inválido.'); return; }
                         if (belongsToConversation(message, currentUser, selectedUser)) {
                             setMessages(previous => mergeMessages(previous, [message]));
-                        } else if (String(message.senderId) !== String(currentUser.id) && message.senderEmail !== currentUser.email) {
+                        } else if (String(message.senderId) !== String(currentUser.id)) {
                             toast(`Nova mensagem de ${message.senderName || 'outro contato'}`, { icon: '📩' });
                         }
                     });
@@ -122,7 +122,7 @@ export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProp
         <div className="flex flex-col h-full w-full bg-gray-900">
             <div className="p-4 border-b border-gray-800 bg-gray-800 flex items-center justify-between shadow-md">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gradient-to-tr from-blue-500 to-purple-500 rounded-full flex items-center justify-center font-bold text-white">
+                    <div className="w-10 h-10 bg-linear-to-tr from-blue-500 to-purple-500 rounded-full flex items-center justify-center font-bold text-white">
                         {selectedUser.name.charAt(0).toUpperCase()}
                     </div>
                     <div>

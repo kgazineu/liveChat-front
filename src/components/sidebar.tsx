@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { errorMessage } from '@/src/services/errors';
 import { clearSession } from '@/src/services/session';
+import { fetchAllPages } from '@/src/services/pagination';
 
 interface SidebarProps {
     onUserSelected: (user: User) => void;
@@ -25,8 +26,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
 
     const fetchFriends = useCallback(async () => {
         try {
-            const res = await api.get('/friendships');
-            setFriends(res.data);
+            setFriends(await fetchAllPages<User>('/friendships'));
         } catch (error) {
             toast.error(errorMessage(error, "Erro ao buscar amigos"));
         }
@@ -34,8 +34,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
 
     const fetchRequests = useCallback(async () => {
         try {
-            const res = await api.get('/friendships/requests');
-            setRequests(res.data);
+            setRequests(await fetchAllPages<FriendRequest>('/friendships/requests'));
         } catch (error) {
             toast.error(errorMessage(error, "Erro ao buscar solicitações"));
         }
@@ -174,7 +173,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
                     <div className="mt-4 p-3 bg-gray-800 rounded border border-blue-500 flex justify-between items-center animate-fade-in">
                         <div>
                             <p className="font-bold text-sm">{foundUser.name}</p>
-                            <p className="text-xs text-gray-400">{foundUser.email}</p>
+                            <p className="text-xs text-gray-400">Usuário encontrado</p>
                         </div>
                         <button
                             onClick={sendRequest}
@@ -225,7 +224,7 @@ export default function Sidebar({ onUserSelected }: SidebarProps) {
                                 </div>
                                 <div>
                                     <p className="font-medium">{friend.name}</p>
-                                    <p className="text-xs text-gray-400">{friend.email}</p>
+                                    <p className="text-xs text-gray-400">Amigo</p>
                                 </div>
                             </div>
                         ))}

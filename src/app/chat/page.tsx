@@ -5,12 +5,12 @@ import Cookies from 'js-cookie';
 import { useRouter } from 'next/navigation';
 import WorkspaceShell from '@/src/components/workspace-shell';
 import api from '@/src/services/api';
-import { User } from '@/src/types';
+import type { CurrentUser } from '@/src/types';
 import { clearSession } from '@/src/services/session';
 
 export default function ChatPage() {
     const router = useRouter();
-    const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
     const [loadError, setLoadError] = useState(false);
     const [attempt, setAttempt] = useState(0);
 
@@ -25,7 +25,7 @@ export default function ChatPage() {
 
     let active = true;
     const controller = new AbortController();
-    api.get('/users/me', { signal: controller.signal })
+    api.get<CurrentUser>('/users/me', { signal: controller.signal })
         .then(res => { if (active) setCurrentUser(res.data); })
         .catch(() => { if (active) setLoadError(true); });
     return () => { active = false; controller.abort(); };

@@ -1,6 +1,6 @@
 'use client';
 
-import { Client } from '@stomp/stompjs';
+import { Client, ReconnectionTimeMode } from '@stomp/stompjs';
 import Cookies from 'js-cookie';
 import {
   createContext,
@@ -41,11 +41,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object';
 }
 
+function isMessageAttachment(value: unknown) {
+  return isObject(value) && typeof value.id === 'string' && typeof value.originalName === 'string' &&
+    typeof value.contentType === 'string' && typeof value.size === 'number' &&
+    typeof value.downloadUrl === 'string' && typeof value.downloadExpiresAt === 'string';
+}
+
 function isChannelMessage(value: unknown): value is ChannelMessage {
   if (!isObject(value)) return false;
   return value.id != null && typeof value.channelId === 'string' &&
     typeof value.content === 'string' && typeof value.authorId === 'string' &&
-    typeof value.authorName === 'string' && typeof value.createdAt === 'string';
+    typeof value.authorName === 'string' && typeof value.createdAt === 'string' &&
+    Array.isArray(value.attachments) && value.attachments.every(isMessageAttachment);
 }
 
 function isPresenceEvent(value: unknown): value is MediaPresenceEvent {
@@ -107,6 +114,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           brokerURL: config.brokerUrl,
           connectHeaders: { Authorization: `Bearer ${token}` },
           reconnectDelay: 3000,
+          reconnectTimeMode: ReconnectionTimeMode.EXPONENTIAL,
+          maxReconnectDelay: 60000,
           connectionTimeout: 10000,
           heartbeatIncoming: 10000,
           heartbeatOutgoing: 10000,
