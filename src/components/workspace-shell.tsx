@@ -937,7 +937,6 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
             onSummaryAction={handleMediaSummary}
             showMetrics={showWebRtcMetrics}
             participantVolumes={participantVolumes}
-            onParticipantVolumeChangeAction={changeParticipantVolume}
             devicePanelTarget={mediaDevicePanelTarget}
           />
         )}

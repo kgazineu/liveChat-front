@@ -256,6 +256,7 @@ it('abre o volume do participante sob o canal somente após o clique e persiste 
 
   fireEvent.click(screen.getByRole('button', { name: 'Configurar áudio de Bruno' }));
   const volume = screen.getByRole('slider', { name: 'Volume de Bruno' });
+  expect(screen.queryByText('Participantes da chamada')).not.toBeInTheDocument();
   fireEvent.change(volume, { target: { value: '0.4' } });
 
   expect(window.localStorage.getItem('volume:user-2')).toBe('0.4');
