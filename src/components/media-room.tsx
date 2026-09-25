@@ -8,6 +8,7 @@ import {
   useState,
   type ChangeEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Room,
   RoomEvent,
@@ -387,6 +388,10 @@ export function MediaRoom({
   onOpenAction,
   onLeaveAction,
   onSummaryAction,
+  showMetrics = false,
+  participantVolumes = {},
+  onParticipantVolumeChangeAction,
+  devicePanelTarget = null,
 }: {
   currentUser: CurrentUser;
   target: MediaTarget;
@@ -394,6 +399,10 @@ export function MediaRoom({
   onOpenAction: () => void;
   onLeaveAction: () => void;
   onSummaryAction?: (summary: MediaRoomSummary) => void;
+  showMetrics?: boolean;
+  participantVolumes?: Record<string, number>;
+  onParticipantVolumeChangeAction?: (userId: string, volume: number) => void;
+  devicePanelTarget?: HTMLElement | null;
 }) {
   const { connected: realtimeConnected, subscribePresence } = useRealtime();
   const endpoint = useMemo(() => mediaSessionsEndpoint(target), [target]);
@@ -408,7 +417,6 @@ export function MediaRoom({
   const [localMedia, setLocalMedia] = useState<LocalMediaState>(EMPTY_MEDIA);
   const [activeSpeakers, setActiveSpeakers] = useState<Set<string>>(new Set());
   const [remoteAudioMuted, setRemoteAudioMuted] = useState(false);
-  const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
   const [devices, setDevices] = useState<DeviceLists>(EMPTY_DEVICES);
   const [selectedDevices, setSelectedDevices] = useState<DeviceSelection>(EMPTY_SELECTION);
   const [trackViews, setTrackViews] = useState<{ audio: TrackView[]; video: TrackView[] }>({ audio: [], video: [] });
@@ -417,8 +425,8 @@ export function MediaRoom({
   const [notice, setNotice] = useState<string | null>(null);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<WebRtcMetrics>(EMPTY_METRICS);
-  const [showMetrics, setShowMetrics] = useState(false);
   const [expandedTrackId, setExpandedTrackId] = useState<string | null>(null);
+  const [expandedVolumeUserId, setExpandedVolumeUserId] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -820,10 +828,6 @@ export function MediaRoom({
     }
   }
 
-  function changeParticipantVolume(userId: string, volume: number) {
-    const normalized = storeParticipantVolume(userId, volume);
-    setParticipantVolumes(previous => ({ ...previous, [userId]: normalized }));
-  }
 
   async function enablePlayback() {
     const room = roomRef.current;
@@ -838,7 +842,6 @@ export function MediaRoom({
     }
   }
 
-  const speakerIds = activeSpeakers;
   const expandedTrack = expandedTrackId
     ? trackViews.video.find(view => view.id === expandedTrackId) ?? null
     : null;
@@ -938,17 +941,6 @@ export function MediaRoom({
             </div>
           )}
 
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              onClick={() => setShowMetrics(visible => !visible)}
-              aria-expanded={showMetrics}
-              className="inline-flex items-center gap-2 rounded-xl border border-white/8 bg-white/3 px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-white/7 hover:text-slate-200"
-            >
-              <span aria-hidden="true">{showMetrics ? '⌃' : '⌄'}</span>
-              {showMetrics ? 'Ocultar qualidade WebRTC' : 'Mostrar qualidade WebRTC'}
-            </button>
-          </div>
           {showMetrics && <MetricsPanel metrics={metrics} />}
 
           <section className="mt-5 rounded-2xl border border-white/8 bg-black/10 p-4" aria-labelledby="call-participants-title">
@@ -963,36 +955,48 @@ export function MediaRoom({
                 <p className="rounded-xl bg-white/5 px-3 py-4 text-center text-sm text-slate-400 md:col-span-2">Carregando presença…</p>
               )}
               {visibleSessions.map(session => {
-                const mine = String(session.userId) === String(currentUser.id);
-                const speaking = speakerIds.has(String(session.userId));
-                const volume = participantVolumes[String(session.userId)] ?? storedParticipantVolume(String(session.userId));
+                const userId = String(session.userId);
+                const mine = userId === String(currentUser.id);
+                const volume = participantVolumes[userId] ?? storedParticipantVolume(userId);
+                const volumeExpanded = target.kind === 'DIRECT' && expandedVolumeUserId === userId;
                 return (
                   <article
                     key={session.userId}
-                    className={`flex min-w-0 items-center gap-3 rounded-xl border px-3 py-2.5 transition ${speaking ? 'border-emerald-400/35 bg-emerald-400/8' : 'border-white/5 bg-white/3'}`}
+                    className="flex min-w-0 items-center gap-3 rounded-xl border border-white/5 bg-white/3 px-3 py-2.5"
                   >
                     <div className="relative shrink-0">
-                      <div className={`grid h-9 w-9 place-items-center rounded-full text-sm font-semibold ring-2 transition ${speaking ? 'bg-violet-500/25 text-violet-100 ring-emerald-400/70' : 'bg-violet-500/20 text-violet-200 ring-transparent'}`}>
+                      <div className="grid h-9 w-9 place-items-center rounded-full bg-violet-500/20 text-sm font-semibold text-violet-200">
                         {session.userName.charAt(0).toUpperCase()}
                       </div>
                       <span
-                        className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-900 transition ${speaking ? 'bg-emerald-400' : 'bg-slate-600'}`}
-                        aria-label={speaking ? `${session.userName} está falando` : `${session.userName} não está falando`}
+                        className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-900 bg-slate-600"
+                        aria-label={`${session.userName} está conectado`}
                       />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <strong className="truncate text-sm">{mine ? 'Você' : session.userName}</strong>
-                        <div className="flex shrink-0 gap-1 text-xs text-slate-400" aria-label="Estado de mídia">
+                        <div className="flex shrink-0 items-center gap-1 text-xs text-slate-400" aria-label="Estado de mídia">
                           <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>{session.microphoneEnabled ? '🎙' : '🔇'}</span>
                           {session.cameraEnabled && <span title="Câmera ligada">📷</span>}
                           {session.screenShareEnabled && <span title="Compartilhando tela">▣</span>}
+                          {!mine && target.kind === 'DIRECT' && (
+                            <button
+                              type="button"
+                              onClick={() => setExpandedVolumeUserId(current => current === userId ? null : userId)}
+                              className="ml-1 rounded-md px-1.5 py-0.5 text-slate-500 transition hover:bg-white/7 hover:text-violet-200"
+                              aria-label={`Regular volume de ${session.userName}`}
+                              aria-expanded={volumeExpanded}
+                            >
+                              🔊
+                            </button>
+                          )}
                         </div>
                       </div>
                       {mine ? (
                         <p className="mt-1 text-[11px] text-slate-500">{sessionStatusLabel(session.status)}</p>
-                      ) : (
-                        <label className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">
+                      ) : volumeExpanded ? (
+                        <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
                           <span className="shrink-0">Volume</span>
                           <input
                             type="range"
@@ -1000,13 +1004,13 @@ export function MediaRoom({
                             max="1"
                             step="0.05"
                             value={volume}
-                            onChange={event => changeParticipantVolume(String(session.userId), Number(event.currentTarget.value))}
+                            onChange={event => onParticipantVolumeChangeAction?.(userId, Number(event.currentTarget.value))}
                             className="h-1 min-w-0 flex-1 accent-violet-400"
                             aria-label={`Volume de ${session.userName}`}
                           />
                           <span className="w-8 text-right">{Math.round(volume * 100)}%</span>
                         </label>
-                      )}
+                      ) : null}
                     </div>
                   </article>
                 );
@@ -1014,14 +1018,6 @@ export function MediaRoom({
             </div>
           </section>
 
-          <details className="mt-4 rounded-2xl border border-white/8 bg-white/2.5 p-4">
-            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Dispositivos de mídia</summary>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <DeviceSelect label="Microfone" kind="audioinput" devices={devices.audioinput} value={selectedDevices.audioinput} onChange={changeDevice} />
-              <DeviceSelect label="Câmera" kind="videoinput" devices={devices.videoinput} value={selectedDevices.videoinput} onChange={changeDevice} />
-              <DeviceSelect label="Saída de áudio" kind="audiooutput" devices={devices.audiooutput} value={selectedDevices.audiooutput} onChange={changeDevice} />
-            </div>
-          </details>
       </main>
         </section>
       )}
@@ -1038,6 +1034,15 @@ export function MediaRoom({
         onOpen={onOpenAction}
         onLeave={onLeaveAction}
       />
+
+      {devicePanelTarget && createPortal(
+        <MediaDevicePanel
+          devices={devices}
+          selectedDevices={selectedDevices}
+          onChangeAction={changeDevice}
+        />,
+        devicePanelTarget,
+      )}
 
       {visible && expandedTrack && (
         <ScreenShareViewer
@@ -1205,6 +1210,29 @@ function RemoteAudioTrackElement({
   }, [muted, volume]);
 
   return <audio ref={elementRef} autoPlay />;
+}
+
+function MediaDevicePanel({
+  devices,
+  selectedDevices,
+  onChangeAction,
+}: {
+  devices: DeviceLists;
+  selectedDevices: DeviceSelection;
+  onChangeAction: (event: ChangeEvent<HTMLSelectElement>) => void;
+}) {
+  return (
+    <details className="border-t border-white/7 p-3">
+      <summary className="cursor-pointer rounded-xl px-2 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400 transition hover:bg-white/5 hover:text-slate-200">
+        Dispositivos de mídia
+      </summary>
+      <div className="mt-3 grid gap-3">
+        <DeviceSelect label="Microfone" kind="audioinput" devices={devices.audioinput} value={selectedDevices.audioinput} onChange={onChangeAction} />
+        <DeviceSelect label="Câmera" kind="videoinput" devices={devices.videoinput} value={selectedDevices.videoinput} onChange={onChangeAction} />
+        <DeviceSelect label="Saída de áudio" kind="audiooutput" devices={devices.audiooutput} value={selectedDevices.audiooutput} onChange={onChangeAction} />
+      </div>
+    </details>
+  );
 }
 
 function DeviceSelect({

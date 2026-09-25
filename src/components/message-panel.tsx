@@ -373,14 +373,15 @@ function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelP
           {messages.map((message, index) => {
             const mine = String(message.authorId) === String(currentUser.id);
             const previous = messages[index - 1];
-            const grouped = previous?.authorId === message.authorId &&
+            const grouped = previous != null &&
+              String(previous.authorId) === String(message.authorId) &&
               Date.parse(message.createdAt) - Date.parse(previous.createdAt) < 5 * 60 * 1000;
             return (
               <article key={message.id} className={`message-row ${mine ? 'message-row-mine' : ''} ${grouped ? 'mt-1' : 'mt-5'}`}>
                 {!grouped && (
                   <div className="message-avatar" aria-hidden="true">{message.authorName.charAt(0).toUpperCase()}</div>
                 )}
-                <div className={`min-w-0 ${grouped ? 'ml-11' : ''}`}>
+                <div className={`flex min-w-0 flex-col ${mine ? 'items-end' : 'items-start'} ${grouped ? (mine ? 'mr-11' : 'ml-11') : ''}`}>
                   {!grouped && (
                     <div className={`mb-1 flex items-baseline gap-2 ${mine ? 'justify-end' : ''}`}>
                       <strong className="text-sm text-slate-100">{mine ? 'Você' : message.authorName}</strong>
