@@ -18,12 +18,12 @@ import {
 import api from '@/src/services/api';
 import { errorMessage } from '@/src/services/errors';
 import type {
+  CurrentUser,
   LiveKitConnection,
   MediaPresenceEvent,
   MediaSession,
   MediaSessionStatus,
   MediaTarget,
-  User,
 } from '@/src/types';
 import { useRealtime } from './realtime-provider';
 
@@ -66,6 +66,11 @@ interface WebRtcMetrics {
 interface PreviousByteSample {
   bytes: number;
   timestamp: number;
+}
+
+export interface MediaRoomSummary {
+  sessions: MediaSession[];
+  speakingUserIds: string[];
 }
 
 const EMPTY_MEDIA: LocalMediaState = {
@@ -137,6 +142,29 @@ function playCallSound(kind: 'join' | 'leave') {
   } catch {
     // Voice audio keeps its own unblock prompt when the browser rejects Web Audio.
   }
+}
+
+export function storedParticipantVolume(userId: string) {
+  if (typeof window === 'undefined') return 1;
+  const rawVolume = window.localStorage.getItem(`volume:${userId}`);
+  if (rawVolume == null) return 1;
+  const stored = Number(rawVolume);
+  return Number.isFinite(stored) && stored >= 0 && stored <= 1 ? stored : 1;
+}
+
+export function storeParticipantVolume(userId: string, volume: number) {
+  const normalized = Math.min(1, Math.max(0, volume));
+  try {
+    window.localStorage.setItem(`volume:${userId}`, String(normalized));
+  } catch {
+    // O áudio continua funcional mesmo quando o armazenamento local está indisponível.
+  }
+  return normalized;
+}
+
+export function applyRemoteAudioSettings(element: HTMLAudioElement, muted: boolean, volume: number) {
+  element.muted = muted;
+  element.volume = muted ? 0 : Math.min(1, Math.max(0, volume));
 }
 
 function mediaSessionsEndpoint(target: MediaTarget) {
@@ -358,12 +386,14 @@ export function MediaRoom({
   visible,
   onOpenAction,
   onLeaveAction,
+  onSummaryAction,
 }: {
-  currentUser: User;
+  currentUser: CurrentUser;
   target: MediaTarget;
   visible: boolean;
   onOpenAction: () => void;
   onLeaveAction: () => void;
+  onSummaryAction?: (summary: MediaRoomSummary) => void;
 }) {
   const { connected: realtimeConnected, subscribePresence } = useRealtime();
   const endpoint = useMemo(() => mediaSessionsEndpoint(target), [target]);
@@ -377,6 +407,8 @@ export function MediaRoom({
   const [connectionState, setConnectionState] = useState<ConnectionUiState>('loading');
   const [localMedia, setLocalMedia] = useState<LocalMediaState>(EMPTY_MEDIA);
   const [activeSpeakers, setActiveSpeakers] = useState<Set<string>>(new Set());
+  const [remoteAudioMuted, setRemoteAudioMuted] = useState(false);
+  const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
   const [devices, setDevices] = useState<DeviceLists>(EMPTY_DEVICES);
   const [selectedDevices, setSelectedDevices] = useState<DeviceSelection>(EMPTY_SELECTION);
   const [trackViews, setTrackViews] = useState<{ audio: TrackView[]; video: TrackView[] }>({ audio: [], video: [] });
@@ -426,6 +458,7 @@ export function MediaRoom({
     const seenEvents = new Set<string>();
     const removedParticipants = new Set<string>();
     const previousBytes = previousBytesRef.current;
+    const speakerClearTimers = new Map<string, number>();
     let leaveSoundPlayed = false;
 
     localMediaRef.current = EMPTY_MEDIA;
@@ -479,7 +512,29 @@ export function MediaRoom({
 
     const updateSpeakers = (speakers: Participant[]) => {
       if (!active) return;
-      setActiveSpeakers(new Set(speakers.map(participant => participant.identity)));
+      const incoming = new Set(speakers.map(participant => participant.identity));
+      setActiveSpeakers(previous => {
+        const next = new Set(previous);
+        incoming.forEach(id => {
+          const timer = speakerClearTimers.get(id);
+          if (timer) window.clearTimeout(timer);
+          speakerClearTimers.delete(id);
+          next.add(id);
+        });
+        previous.forEach(id => {
+          if (incoming.has(id) || speakerClearTimers.has(id)) return;
+          const timer = window.setTimeout(() => {
+            speakerClearTimers.delete(id);
+            setActiveSpeakers(current => {
+              const updated = new Set(current);
+              updated.delete(id);
+              return updated;
+            });
+          }, 350);
+          speakerClearTimers.set(id, timer);
+        });
+        return next;
+      });
     };
 
     const patchFromRoom = async (status?: MediaSessionStatus) => {
@@ -657,6 +712,8 @@ export function MediaRoom({
       connectionRef.current = null;
       credential = null;
       previousBytes.clear();
+      speakerClearTimers.forEach(timer => window.clearTimeout(timer));
+      speakerClearTimers.clear();
       if (roomRef.current === room) roomRef.current = null;
       if (room) void room.disconnect(true);
       if (joined) {
@@ -665,6 +722,13 @@ export function MediaRoom({
       }
     };
   }, [applyOwnPresence, currentUser.id, endpoint, retry, subscribePresence, target]);
+
+  useEffect(() => {
+    onSummaryAction?.({
+      sessions,
+      speakingUserIds: [...activeSpeakers],
+    });
+  }, [activeSpeakers, onSummaryAction, sessions]);
 
   useEffect(() => {
     if (connectionState !== 'connected') return;
@@ -756,6 +820,11 @@ export function MediaRoom({
     }
   }
 
+  function changeParticipantVolume(userId: string, volume: number) {
+    const normalized = storeParticipantVolume(userId, volume);
+    setParticipantVolumes(previous => ({ ...previous, [userId]: normalized }));
+  }
+
   async function enablePlayback() {
     const room = roomRef.current;
     if (!room) return;
@@ -831,8 +900,7 @@ export function MediaRoom({
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
-        <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+      <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
           {fatalError ? (
             <div className="grid min-h-72 place-items-center">
               <div className="max-w-md rounded-2xl border border-rose-400/20 bg-rose-400/8 p-6 text-center">
@@ -882,52 +950,79 @@ export function MediaRoom({
             </button>
           </div>
           {showMetrics && <MetricsPanel metrics={metrics} />}
-        </main>
 
-        <aside className="w-full shrink-0 border-t border-white/10 bg-black/10 p-4 xl:w-80 xl:border-l xl:border-t-0 xl:p-5">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Participantes</h2>
-          <div className="mt-3 flex max-h-64 flex-col gap-2 overflow-y-auto xl:max-h-[38vh]">
-            {(connectionState === 'loading' || connectionState === 'connecting') && visibleSessions.length === 0 && (
-              <p className="rounded-xl bg-white/5 px-3 py-4 text-center text-sm text-slate-400">Carregando presença…</p>
-            )}
-            {visibleSessions.map(session => {
-              const mine = String(session.userId) === String(currentUser.id);
-              const speaking = speakerIds.has(String(session.userId));
-              return (
-                <article
-                  key={session.userId}
-                  className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${speaking ? 'border-emerald-400/35 bg-emerald-400/10' : 'border-white/5 bg-white/3'}`}
-                >
-                  <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm font-semibold ${speaking ? 'bg-emerald-400 text-emerald-950' : 'bg-violet-500/20 text-violet-200'}`}>
-                    {session.userName.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <strong className="truncate text-sm">{mine ? 'Você' : session.userName}</strong>
-                      {speaking && <span className="text-[10px] font-medium text-emerald-300">falando</span>}
+          <section className="mt-5 rounded-2xl border border-white/8 bg-black/10 p-4" aria-labelledby="call-participants-title">
+            <div className="flex items-center justify-between gap-3">
+              <h2 id="call-participants-title" className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Participantes da chamada
+              </h2>
+              <span className="text-xs text-slate-500">{visibleSessions.length} conectados</span>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {(connectionState === 'loading' || connectionState === 'connecting') && visibleSessions.length === 0 && (
+                <p className="rounded-xl bg-white/5 px-3 py-4 text-center text-sm text-slate-400 md:col-span-2">Carregando presença…</p>
+              )}
+              {visibleSessions.map(session => {
+                const mine = String(session.userId) === String(currentUser.id);
+                const speaking = speakerIds.has(String(session.userId));
+                const volume = participantVolumes[String(session.userId)] ?? storedParticipantVolume(String(session.userId));
+                return (
+                  <article
+                    key={session.userId}
+                    className={`flex min-w-0 items-center gap-3 rounded-xl border px-3 py-2.5 transition ${speaking ? 'border-emerald-400/35 bg-emerald-400/8' : 'border-white/5 bg-white/3'}`}
+                  >
+                    <div className="relative shrink-0">
+                      <div className={`grid h-9 w-9 place-items-center rounded-full text-sm font-semibold ring-2 transition ${speaking ? 'bg-violet-500/25 text-violet-100 ring-emerald-400/70' : 'bg-violet-500/20 text-violet-200 ring-transparent'}`}>
+                        {session.userName.charAt(0).toUpperCase()}
+                      </div>
+                      <span
+                        className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-900 transition ${speaking ? 'bg-emerald-400' : 'bg-slate-600'}`}
+                        aria-label={speaking ? `${session.userName} está falando` : `${session.userName} não está falando`}
+                      />
                     </div>
-                    <p className="text-[11px] text-slate-500">{sessionStatusLabel(session.status)}</p>
-                  </div>
-                  <div className="flex gap-1 text-xs text-slate-400" aria-label="Estado de mídia">
-                    <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>{session.microphoneEnabled ? '🎙' : '🔇'}</span>
-                    {session.cameraEnabled && <span title="Câmera ligada">📷</span>}
-                    {session.screenShareEnabled && <span title="Compartilhando tela">▣</span>}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <strong className="truncate text-sm">{mine ? 'Você' : session.userName}</strong>
+                        <div className="flex shrink-0 gap-1 text-xs text-slate-400" aria-label="Estado de mídia">
+                          <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>{session.microphoneEnabled ? '🎙' : '🔇'}</span>
+                          {session.cameraEnabled && <span title="Câmera ligada">📷</span>}
+                          {session.screenShareEnabled && <span title="Compartilhando tela">▣</span>}
+                        </div>
+                      </div>
+                      {mine ? (
+                        <p className="mt-1 text-[11px] text-slate-500">{sessionStatusLabel(session.status)}</p>
+                      ) : (
+                        <label className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">
+                          <span className="shrink-0">Volume</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={volume}
+                            onChange={event => changeParticipantVolume(String(session.userId), Number(event.currentTarget.value))}
+                            className="h-1 min-w-0 flex-1 accent-violet-400"
+                            aria-label={`Volume de ${session.userName}`}
+                          />
+                          <span className="w-8 text-right">{Math.round(volume * 100)}%</span>
+                        </label>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
 
-          <div className="mt-5 border-t border-white/8 pt-5">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Dispositivos</h2>
-            <div className="mt-3 space-y-3">
+          <details className="mt-4 rounded-2xl border border-white/8 bg-white/2.5 p-4">
+            <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Dispositivos de mídia</summary>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
               <DeviceSelect label="Microfone" kind="audioinput" devices={devices.audioinput} value={selectedDevices.audioinput} onChange={changeDevice} />
               <DeviceSelect label="Câmera" kind="videoinput" devices={devices.videoinput} value={selectedDevices.videoinput} onChange={changeDevice} />
               <DeviceSelect label="Saída de áudio" kind="audiooutput" devices={devices.audiooutput} value={selectedDevices.audiooutput} onChange={changeDevice} />
             </div>
-          </div>
-        </aside>
-          </div>
+          </details>
+      </main>
         </section>
       )}
 
@@ -937,7 +1032,9 @@ export function MediaRoom({
         connectionState={connectionState}
         localMedia={localMedia}
         busyControl={busyControl}
+        remoteAudioMuted={remoteAudioMuted}
         onToggle={kind => void toggleMedia(kind)}
+        onToggleRemoteAudio={() => setRemoteAudioMuted(muted => !muted)}
         onOpen={onOpenAction}
         onLeave={onLeaveAction}
       />
@@ -955,6 +1052,8 @@ export function MediaRoom({
           <RemoteAudioTrackElement
             key={`${view.participantId}:${view.id}`}
             track={view.track as RemoteTrack}
+            muted={remoteAudioMuted}
+            volume={participantVolumes[view.participantId] ?? storedParticipantVolume(view.participantId)}
             onBlocked={markAutoplayBlocked}
           />
         ))}
@@ -1076,7 +1175,17 @@ export function ScreenShareViewer({
   );
 }
 
-function RemoteAudioTrackElement({ track, onBlocked }: { track: RemoteTrack; onBlocked: () => void }) {
+function RemoteAudioTrackElement({
+  track,
+  muted,
+  volume,
+  onBlocked,
+}: {
+  track: RemoteTrack;
+  muted: boolean;
+  volume: number;
+  onBlocked: () => void;
+}) {
   const elementRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
@@ -1088,6 +1197,12 @@ function RemoteAudioTrackElement({ track, onBlocked }: { track: RemoteTrack; onB
       track.detach(element);
     };
   }, [onBlocked, track]);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return;
+    applyRemoteAudioSettings(element, muted, volume);
+  }, [muted, volume]);
 
   return <audio ref={elementRef} autoPlay />;
 }
@@ -1132,16 +1247,20 @@ function CallControlDock({
   connectionState,
   localMedia,
   busyControl,
+  remoteAudioMuted,
   onToggle,
+  onToggleRemoteAudio,
   onOpen,
   onLeave,
 }: {
-  currentUser: User;
+  currentUser: CurrentUser;
   roomTitle: string;
   connectionState: ConnectionUiState;
   localMedia: LocalMediaState;
   busyControl: 'microphone' | 'camera' | 'screen' | null;
+  remoteAudioMuted: boolean;
   onToggle: (kind: 'microphone' | 'camera' | 'screen') => void;
+  onToggleRemoteAudio: () => void;
   onOpen: () => void;
   onLeave: () => void;
 }) {
@@ -1161,6 +1280,9 @@ function CallControlDock({
         >
           <p className="truncate text-xs font-semibold text-white">{currentUser.name}</p>
           <p className="truncate text-[10px] text-emerald-300">◉ {connectionLabel(connectionState)} em {roomTitle}</p>
+          <p className="truncate text-[10px] text-slate-500">
+            Microfone {localMedia.microphoneEnabled ? 'ligado' : 'desligado'} · áudio {remoteAudioMuted ? 'silenciado' : 'ativo'}
+          </p>
         </button>
         <button
           type="button"
@@ -1172,7 +1294,7 @@ function CallControlDock({
           ↪
         </button>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         <CallControlButton
           label={localMedia.microphoneEnabled ? 'Desligar microfone' : 'Ligar microfone'}
           active={localMedia.microphoneEnabled}
@@ -1180,6 +1302,14 @@ function CallControlDock({
           disabled={disabled}
           onClick={() => onToggle('microphone')}
           icon={localMedia.microphoneEnabled ? '🎙' : '🔇'}
+        />
+        <CallControlButton
+          label={remoteAudioMuted ? 'Ativar áudio recebido' : 'Silenciar áudio recebido'}
+          active={!remoteAudioMuted}
+          busy={false}
+          disabled={connectionState !== 'connected'}
+          onClick={onToggleRemoteAudio}
+          icon={remoteAudioMuted ? '🔈' : '🔊'}
         />
         <CallControlButton
           label={localMedia.cameraEnabled ? 'Desligar câmera' : 'Ligar câmera'}
@@ -1198,6 +1328,16 @@ function CallControlDock({
           icon="▣"
         />
       </div>
+      {localMedia.screenShareEnabled && (
+        <button
+          type="button"
+          onClick={() => onToggle('screen')}
+          disabled={disabled}
+          className="mt-2 w-full rounded-lg border border-rose-400/25 bg-rose-500/12 px-3 py-2 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/22 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busyControl === 'screen' ? 'Parando compartilhamento…' : '■ Parar compartilhamento de tela'}
+        </button>
+      )}
     </section>
   );
 }

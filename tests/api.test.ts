@@ -2,11 +2,14 @@ import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import Cookies from 'js-cookie';
 import { beforeEach, expect, it, vi } from 'vitest';
 import api from '@/src/services/api';
+import { errorMessage } from '@/src/services/errors';
+import { clearRateLimitCooldowns, RateLimitError } from '@/src/services/rate-limit';
 
 vi.mock('@/src/services/runtime-config', () => ({ getRuntimeConfig: async () => ({ apiUrl: 'https://api.example.invalid/v1', brokerUrl: 'wss://ws.example.invalid/ws' }) }));
 beforeEach(() => {
   Cookies.set('chat_token', 'test-token', { path: '/' });
   Cookies.remove('chat_refresh_token', { path: '/' });
+  clearRateLimitCooldowns();
   vi.restoreAllMocks();
 });
 
@@ -43,6 +46,57 @@ it.each([
     return rejectWith(401)(config);
   } })).rejects.toThrow();
   expect(Cookies.get('chat_token')).toBe('test-token');
+});
+
+it('respeita Retry-After e bloqueia novas tentativas durante o cooldown', async () => {
+  const firstError = await api.post('/users/login', {}, { adapter: async config => {
+    const response = {
+      status: 429,
+      statusText: 'Too Many Requests',
+      data: { message: 'Rate limit exceeded. Try again later.' },
+      headers: { 'retry-after': '7' },
+      config,
+    };
+    throw new AxiosError('Too Many Requests', undefined, config, undefined, response);
+  } }).catch(error => error);
+
+  expect(errorMessage(firstError, 'Falha no login.')).toBe(
+    'Muitas tentativas. Tente novamente em 7 segundos.',
+  );
+  expect(Cookies.get('chat_token')).toBe('test-token');
+
+  const adapter = vi.fn();
+  await expect(api.post('/users/login', {}, { adapter })).rejects.toBeInstanceOf(RateLimitError);
+  expect(adapter).not.toHaveBeenCalled();
+});
+
+it('compartilha o cooldown de reservas de anexos entre canais distintos', async () => {
+  const firstError = await api.post(
+    '/servers/server-1/channels/channel-1/attachments/uploads',
+    { originalName: 'foto.png', contentType: 'image/png', size: 4 },
+    { adapter: async config => {
+      const response = {
+        status: 429,
+        statusText: 'Too Many Requests',
+        data: { message: 'Rate limit exceeded. Try again later.' },
+        headers: { 'retry-after': '5' },
+        config,
+      };
+      throw new AxiosError('Too Many Requests', undefined, config, undefined, response);
+    } },
+  ).catch(error => error);
+
+  expect(errorMessage(firstError, 'Não foi possível reservar o anexo.')).toBe(
+    'Muitas tentativas. Tente novamente em 5 segundos.',
+  );
+
+  const adapter = vi.fn();
+  await expect(api.post(
+    '/direct-channels/channel-2/attachments/uploads',
+    { originalName: 'arquivo.pdf', contentType: 'application/pdf', size: 4 },
+    { adapter },
+  )).rejects.toBeInstanceOf(RateLimitError);
+  expect(adapter).not.toHaveBeenCalled();
 });
 
 it('renova a sessão e repete uma requisição protegida após 401', async () => {

@@ -1,7 +1,19 @@
 export interface User {
     id: string;
     name: string;
+}
+
+export interface CurrentUser extends User {
     email: string;
+}
+
+export interface PageResponse<T> {
+    content: T[];
+    page: number;
+    size: number;
+    totalElements: number;
+    totalPages: number;
+    last: boolean;
 }
 
 export interface FriendRequest {
@@ -15,14 +27,14 @@ export interface Message {
     content: string;
     senderId: string;
     senderName: string;
-    senderEmail: string;
+    senderEmail?: string;
     timestamp: string;
     receiverId: string;
-    receiverEmail: string;
+    receiverEmail?: string;
 }
 
 export interface ChatWindowProps {
-    currentUser: User;
+    currentUser: CurrentUser;
     selectedUser: User;
 }
 
@@ -67,7 +79,6 @@ export interface ServerInvite {
 export interface ServerMember {
     userId: string;
     userName: string;
-    userEmail: string;
     role: ServerRole;
     joinedAt: string;
 }
@@ -102,6 +113,55 @@ export interface ServerMemberEvent {
     member: ServerMember;
 }
 
+export type AttachmentContentType =
+    | 'image/jpeg'
+    | 'image/png'
+    | 'image/webp'
+    | 'image/gif'
+    | 'video/mp4'
+    | 'video/webm'
+    | 'application/pdf'
+    | 'text/plain'
+    | 'text/csv'
+    | 'text/markdown'
+    | 'application/json'
+    | 'application/msword'
+    | 'application/vnd.ms-excel'
+    | 'application/vnd.ms-powerpoint'
+    | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    | 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    | 'application/vnd.oasis.opendocument.text'
+    | 'application/vnd.oasis.opendocument.spreadsheet'
+    | 'application/vnd.oasis.opendocument.presentation';
+
+export interface MessageAttachment {
+    id: string;
+    originalName: string;
+    contentType: AttachmentContentType;
+    size: number;
+    width: number | null;
+    height: number | null;
+    downloadUrl: string;
+    downloadExpiresAt: string;
+}
+
+export interface AttachmentUploadRequest {
+    originalName: string;
+    contentType: AttachmentContentType;
+    size: number;
+    width?: number;
+    height?: number;
+}
+
+export interface AttachmentUploadResponse {
+    attachmentId: string;
+    uploadUrl: string;
+    uploadMethod: 'POST';
+    formFields: Record<string, string>;
+    expiresAt: string;
+}
+
 export interface ChannelMessage {
     id: number;
     channelId: string;
@@ -109,6 +169,7 @@ export interface ChannelMessage {
     authorId: string;
     authorName: string;
     createdAt: string;
+    attachments: MessageAttachment[];
 }
 
 export interface LiveKitConnection {

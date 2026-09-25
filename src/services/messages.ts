@@ -1,13 +1,12 @@
-import type { Message, User } from '@/src/types';
+import type { CurrentUser, Message, User } from '@/src/types';
 
-function matches(id: unknown, email: unknown, user: User) {
-  return (id != null && String(id) === String(user.id)) ||
-    (typeof email === 'string' && email.length > 0 && email === user.email);
+function matches(id: unknown, user: User) {
+  return id != null && String(id) === String(user.id);
 }
 
-export function belongsToConversation(message: Message, me: User, other: User) {
-  return (matches(message.senderId, message.senderEmail, me) && matches(message.receiverId, message.receiverEmail, other)) ||
-    (matches(message.senderId, message.senderEmail, other) && matches(message.receiverId, message.receiverEmail, me));
+export function belongsToConversation(message: Message, me: CurrentUser, other: User) {
+  return (matches(message.senderId, me) && matches(message.receiverId, other)) ||
+    (matches(message.senderId, other) && matches(message.receiverId, me));
 }
 
 export function parseMessage(body: string): Message | null {
@@ -15,8 +14,7 @@ export function parseMessage(body: string): Message | null {
     const message = JSON.parse(body);
     if (!message || message.id == null || typeof message.content !== 'string' ||
         typeof message.timestamp !== 'string' || !Number.isFinite(Date.parse(message.timestamp)) ||
-        (message.senderId == null && typeof message.senderEmail !== 'string') ||
-        (message.receiverId == null && typeof message.receiverEmail !== 'string')) return null;
+        message.senderId == null || message.receiverId == null) return null;
     return message;
   } catch {
     return null;
