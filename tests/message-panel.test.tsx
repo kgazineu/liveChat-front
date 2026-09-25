@@ -94,6 +94,37 @@ it('usa o canal privado para histórico, envio e início de chamada', async () =
   expect(mocks.startCall).toHaveBeenCalledOnce();
 });
 
+it('mantém mensagens consecutivas do próprio usuário alinhadas pelo lado direito', async () => {
+  mocks.get.mockResolvedValue({
+    data: page([
+      message({
+        id: 1,
+        content: 'Primeira mensagem própria',
+        authorId: me.id,
+        authorName: me.name,
+        createdAt: '2026-09-22T18:00:00Z',
+      }),
+      message({
+        id: 2,
+        content: 'Segunda mensagem própria',
+        authorId: me.id,
+        authorName: me.name,
+        createdAt: '2026-09-22T18:01:00Z',
+      }),
+    ]),
+  });
+
+  render(<MessagePanel currentUser={me} target={directTarget} />);
+
+  const articles = await screen.findAllByRole('article');
+  expect(articles).toHaveLength(2);
+  expect(articles[0]).toHaveClass('message-row-mine');
+  expect(articles[1]).toHaveClass('message-row-mine');
+  expect(articles[1].firstElementChild).toHaveClass('items-end', 'mr-11');
+  expect(articles[1].firstElementChild).not.toHaveClass('ml-11');
+  expect(screen.getByText('Segunda mensagem própria')).toHaveClass('message-bubble-mine');
+});
+
 it('carrega páginas anteriores e mantém a ordem cronológica do histórico', async () => {
   const recent = message({ id: 2, content: 'Recente', createdAt: '2026-09-22T18:01:00Z' });
   const older = message({ id: 1, content: 'Antiga', createdAt: '2026-09-22T18:00:00Z' });

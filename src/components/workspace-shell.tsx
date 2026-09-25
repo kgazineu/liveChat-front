@@ -30,7 +30,13 @@ import type {
   TextTarget,
   User,
 } from '@/src/types';
-import { MediaRoom, prepareCallSounds, type MediaRoomSummary } from './media-room';
+import {
+  MediaRoom,
+  prepareCallSounds,
+  storedParticipantVolume,
+  storeParticipantVolume,
+  type MediaRoomSummary,
+} from './media-room';
 import MessagePanel from './message-panel';
 import { RealtimeProvider, useRealtime } from './realtime-provider';
 
@@ -130,6 +136,9 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
   const [directChannels, setDirectChannels] = useState<DirectChannel[]>([]);
   const [voiceSessionsByChannel, setVoiceSessionsByChannel] = useState<Record<string, MediaSession[]>>({});
   const [speakingUserIds, setSpeakingUserIds] = useState<string[]>([]);
+  const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
+  const [showWebRtcMetrics, setShowWebRtcMetrics] = useState(false);
+  const [mediaDevicePanelTarget, setMediaDevicePanelTarget] = useState<HTMLDivElement | null>(null);
 
   const [serversLoading, setServersLoading] = useState(true);
   const [communityLoading, setCommunityLoading] = useState(true);
@@ -232,7 +241,9 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
       for (const snapshot of snapshots) {
         const tombstones = voicePresenceTombstonesRef.current.get(snapshot.channelId);
         const sessions = snapshot.sessions
-          .filter(session => session.channelKind === 'SERVER_VOICE' && String(session.serverId) === String(serverId))
+          .filter(session => session.channelKind === 'SERVER_VOICE' &&
+            String(session.serverId) === String(serverId) &&
+            String(session.channelId) === String(snapshot.channelId))
           .filter(session => !tombstones?.has(String(session.userId)));
         next[snapshot.channelId] = snapshot.failed
           ? previous[snapshot.channelId] ?? []
@@ -692,14 +703,23 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
       return;
     }
     const channelId = activeMediaTarget.channelId;
+    const tombstones = voicePresenceTombstonesRef.current.get(channelId);
     setVoiceSessionsByChannel(previous => ({
       ...previous,
       [channelId]: mergeVoiceSessions(
-        summary.sessions.filter(session => session.channelKind === 'SERVER_VOICE' && session.channelId === channelId),
+        previous[channelId] ?? [],
+        summary.sessions.filter(session => session.channelKind === 'SERVER_VOICE' &&
+          session.channelId === channelId &&
+          !tombstones?.has(String(session.userId))),
       ),
     }));
     setSpeakingUserIds(summary.speakingUserIds.map(String));
   }, [activeMediaTarget]);
+
+  const changeParticipantVolume = useCallback((userId: string, volume: number) => {
+    const normalized = storeParticipantVolume(userId, volume);
+    setParticipantVolumes(previous => ({ ...previous, [userId]: normalized }));
+  }, []);
 
   function leaveActiveMedia() {
     if (!activeMediaTarget) return;
@@ -723,6 +743,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
       }));
     }
     setSpeakingUserIds([]);
+    setShowWebRtcMetrics(false);
     setActiveMediaTarget(null);
   }
 
@@ -767,6 +788,20 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
               <span aria-hidden="true">⚙</span>
               Configurações da conta
             </button>
+            {activeMediaTarget && (
+              <button
+                type="button"
+                onClick={() => {
+                  setShowWebRtcMetrics(visible => !visible);
+                  setSettingsMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/7"
+                aria-pressed={showWebRtcMetrics}
+              >
+                <span aria-hidden="true">⌁</span>
+                {showWebRtcMetrics ? 'Ocultar qualidade WebRTC' : 'Mostrar qualidade WebRTC'}
+              </button>
+            )}
             <button
               type="button"
               onClick={logout}
@@ -798,6 +833,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
             voiceChannels={voiceChannels}
             voiceSessionsByChannel={voiceSessionsByChannel}
             speakingUserIds={speakingUserIds}
+            participantVolumes={participantVolumes}
             currentUserId={currentUser.id}
             selectedTarget={selectedTarget}
             activeMediaTarget={activeMediaTarget}
@@ -805,6 +841,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
             onRetry={() => void loadChannels(activeServer.id)}
             onCreateChannel={() => setModal('channel')}
             onInvite={() => setModal('invite')}
+            onParticipantVolumeChange={changeParticipantVolume}
             onClose={() => setMobileSidebarOpen(false)}
           />
         ) : (
@@ -898,6 +935,10 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
             onOpenAction={openActiveMedia}
             onLeaveAction={leaveActiveMedia}
             onSummaryAction={handleMediaSummary}
+            showMetrics={showWebRtcMetrics}
+            participantVolumes={participantVolumes}
+            onParticipantVolumeChangeAction={changeParticipantVolume}
+            devicePanelTarget={mediaDevicePanelTarget}
           />
         )}
       </main>
@@ -910,6 +951,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
           members={members}
           loading={membersLoading}
           friends={friends}
+          onMediaDevicesMountAction={setMediaDevicePanelTarget}
         />
       )}
 
@@ -1175,6 +1217,7 @@ function ServerSidebar({
   voiceChannels,
   voiceSessionsByChannel,
   speakingUserIds,
+  participantVolumes,
   currentUserId,
   selectedTarget,
   activeMediaTarget,
@@ -1182,6 +1225,7 @@ function ServerSidebar({
   onRetry,
   onCreateChannel,
   onInvite,
+  onParticipantVolumeChange,
   onClose,
 }: {
   server: ServerSummary;
@@ -1191,6 +1235,7 @@ function ServerSidebar({
   voiceChannels: ServerChannel[];
   voiceSessionsByChannel: Record<string, MediaSession[]>;
   speakingUserIds: string[];
+  participantVolumes: Record<string, number>;
   currentUserId: string;
   selectedTarget: SelectedTarget | null;
   activeMediaTarget: MediaTarget | null;
@@ -1198,8 +1243,11 @@ function ServerSidebar({
   onRetry: () => void;
   onCreateChannel: () => void;
   onInvite: () => void;
+  onParticipantVolumeChange: (userId: string, volume: number) => void;
   onClose: () => void;
 }) {
+  const [selectedVoiceParticipant, setSelectedVoiceParticipant] = useState<string | null>(null);
+
   return (
     <>
       <header className="border-b border-white/7 p-4">
@@ -1248,24 +1296,55 @@ function ServerSidebar({
                   onClick={() => onSelectChannel(channel)}
                 />
                 {(voiceSessionsByChannel[channel.id] ?? []).map(session => {
+                  const userId = String(session.userId);
+                  const mine = userId === String(currentUserId);
                   const speaking = activeMediaTarget?.kind === 'SERVER_VOICE' &&
                     activeMediaTarget.channelId === channel.id &&
-                    speakingUserIds.includes(String(session.userId));
+                    speakingUserIds.includes(userId);
+                  const selectionKey = `${channel.id}:${userId}`;
+                  const selected = !mine && selectedVoiceParticipant === selectionKey;
+                  const volume = participantVolumes[userId] ?? storedParticipantVolume(userId);
                   return (
-                    <div key={session.userId} className="ml-7 flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-slate-400">
-                      <div className="relative shrink-0">
-                        <Avatar name={session.userName} small />
-                        <span
-                          className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-slate-900 ${speaking ? 'bg-emerald-400' : 'bg-slate-600'}`}
-                          aria-label={speaking ? `${session.userName} está falando` : `${session.userName} não está falando`}
-                        />
-                      </div>
-                      <span className={`min-w-0 flex-1 truncate ${speaking ? 'text-emerald-200' : 'text-slate-400'}`}>
-                        {String(session.userId) === String(currentUserId) ? 'Você' : session.userName}
-                      </span>
-                      <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>
-                        {session.microphoneEnabled ? '🎙' : '🔇'}
-                      </span>
+                    <div key={session.userId} className="ml-7">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!mine) setSelectedVoiceParticipant(current => current === selectionKey ? null : selectionKey);
+                        }}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition ${selected ? 'bg-white/7' : 'hover:bg-white/5'} ${speaking ? 'text-emerald-200' : 'text-slate-400'}`}
+                        aria-label={mine ? `${session.userName} (você)` : `Configurar áudio de ${session.userName}`}
+                        aria-expanded={mine ? undefined : selected}
+                      >
+                        <div className="relative shrink-0">
+                          <Avatar name={session.userName} small />
+                          <span
+                            className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-slate-900 transition ${speaking ? 'bg-emerald-400' : 'bg-slate-600'}`}
+                            aria-label={speaking ? `${session.userName} está falando` : `${session.userName} não está falando`}
+                          />
+                        </div>
+                        <span className="min-w-0 flex-1 truncate">
+                          {mine ? 'Você' : session.userName}
+                        </span>
+                        <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>
+                          {session.microphoneEnabled ? '🎙' : '🔇'}
+                        </span>
+                      </button>
+                      {selected && (
+                        <label className="mx-2 mb-1.5 mt-1 flex items-center gap-2 rounded-lg bg-slate-950/50 px-2 py-2 text-[10px] text-slate-500">
+                          <span className="shrink-0">Volume</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={volume}
+                            onChange={event => onParticipantVolumeChange(userId, Number(event.currentTarget.value))}
+                            className="h-1 min-w-0 flex-1 accent-violet-400"
+                            aria-label={`Volume de ${session.userName}`}
+                          />
+                          <span className="w-7 text-right">{Math.round(volume * 100)}%</span>
+                        </label>
+                      )}
                     </div>
                   );
                 })}
@@ -1285,12 +1364,14 @@ function ServerMembersPanel({
   members,
   loading,
   friends,
+  onMediaDevicesMountAction,
 }: {
   server: ServerSummary;
   currentUserId: string;
   members: ServerMember[];
   loading: boolean;
   friends: User[];
+  onMediaDevicesMountAction: (element: HTMLDivElement | null) => void;
 }) {
   const [selectedMember, setSelectedMember] = useState<ServerMember | null>(null);
   const [sendingToId, setSendingToId] = useState<string | null>(null);
@@ -1374,6 +1455,7 @@ function ServerMembersPanel({
         ))}
         {!loading && members.length === 0 && <p className="px-2 py-3 text-xs text-slate-600">Nenhum membro disponível.</p>}
       </div>
+      <div ref={onMediaDevicesMountAction} className="shrink-0" aria-label="Controles de dispositivos de mídia" />
     </aside>
   );
 }

@@ -1,14 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { beforeEach, expect, it, vi } from 'vitest';
 import WorkspaceShell from '@/src/components/workspace-shell';
-import type { CurrentUser, MediaTarget, TextTarget } from '@/src/types';
+import type { CurrentUser, MediaSession, MediaTarget, TextTarget } from '@/src/types';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   prepareCallSounds: vi.fn(),
   presenceListener: null as ((event: unknown) => void) | null,
+  mediaSummarySessions: [] as MediaSession[],
+  speakingUserIds: [] as string[],
+  summaryEmitted: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -41,38 +45,52 @@ vi.mock('@/src/components/realtime-provider', () => ({
 
 vi.mock('@/src/components/media-room', () => ({
   prepareCallSounds: mocks.prepareCallSounds,
+  storedParticipantVolume: (userId: string) => {
+    const raw = window.localStorage.getItem(`volume:${userId}`);
+    if (raw == null) return 1;
+    const stored = Number(raw);
+    return Number.isFinite(stored) && stored >= 0 && stored <= 1 ? stored : 1;
+  },
+  storeParticipantVolume: (userId: string, volume: number) => {
+    const normalized = Math.min(1, Math.max(0, volume));
+    window.localStorage.setItem(`volume:${userId}`, String(normalized));
+    return normalized;
+  },
   MediaRoom: ({
     target,
     visible,
     onSummaryAction,
+    showMetrics,
+    participantVolumes,
+    devicePanelTarget,
   }: {
     target: MediaTarget;
     visible: boolean;
-    onSummaryAction?: (summary: { sessions: unknown[]; speakingUserIds: string[] }) => void;
+    onSummaryAction?: (summary: { sessions: MediaSession[]; speakingUserIds: string[] }) => void;
+    showMetrics?: boolean;
+    participantVolumes?: Record<string, number>;
+    devicePanelTarget?: HTMLElement | null;
   }) => {
     useEffect(() => {
       if (target.kind !== 'SERVER_VOICE') return;
       onSummaryAction?.({
-        sessions: [{
-          channelKind: 'SERVER_VOICE',
-          serverId: target.serverId,
-          channelId: target.channelId,
-          userId: 'user-2',
-          userName: 'Bruno',
-          status: 'ACTIVE',
-          microphoneEnabled: true,
-          cameraEnabled: false,
-          screenShareEnabled: false,
-          joinedAt: '2026-09-23T12:00:00Z',
-          lastSeenAt: '2026-09-23T12:00:01Z',
-        }],
-        speakingUserIds: ['user-2'],
+        sessions: mocks.mediaSummarySessions,
+        speakingUserIds: mocks.speakingUserIds,
       });
+      mocks.summaryEmitted();
     }, [onSummaryAction, target]);
     return (
-      <div data-testid="media-room" data-visible={String(visible)}>
-        Chamada em {target.title}
-      </div>
+      <>
+        <div
+          data-testid="media-room"
+          data-visible={String(visible)}
+          data-metrics={String(showMetrics)}
+          data-volumes={JSON.stringify(participantVolumes ?? {})}
+        >
+          Chamada em {target.title}
+        </div>
+        {devicePanelTarget && createPortal(<button type="button">Dispositivos de mídia</button>, devicePanelTarget)}
+      </>
     );
   },
 }));
@@ -161,7 +179,23 @@ beforeEach(() => {
   });
   mocks.post.mockReset().mockResolvedValue({ data: {} });
   mocks.prepareCallSounds.mockReset();
+  mocks.summaryEmitted.mockReset();
+  mocks.mediaSummarySessions = [{
+    channelKind: 'SERVER_VOICE',
+    serverId: 'server-1',
+    channelId: 'voice-1',
+    userId: 'user-2',
+    userName: 'Bruno',
+    status: 'ACTIVE',
+    microphoneEnabled: true,
+    cameraEnabled: false,
+    screenShareEnabled: false,
+    joinedAt: '2026-09-23T12:00:00Z',
+    lastSeenAt: '2026-09-23T12:00:01Z',
+  }];
+  mocks.speakingUserIds = ['user-2'];
   mocks.presenceListener = null;
+  window.localStorage.clear();
 });
 
 it('mantém a sala de mídia ativa enquanto o usuário envia mensagens em outro canal', async () => {
@@ -183,6 +217,63 @@ it('mantém a sala de mídia ativa enquanto o usuário envia mensagens em outro 
   fireEvent.click(screen.getByRole('button', { name: 'Sala de voz' }));
   expect(screen.getByTestId('media-room')).toHaveAttribute('data-visible', 'true');
   expect(mocks.prepareCallSounds).toHaveBeenCalledOnce();
+});
+
+it('preserva participantes do snapshot quando a segunda conta entra na chamada', async () => {
+  mocks.mediaSummarySessions = [{
+    channelKind: 'SERVER_VOICE',
+    serverId: 'server-1',
+    channelId: 'voice-1',
+    userId: currentUser.id,
+    userName: currentUser.name,
+    status: 'ACTIVE',
+    microphoneEnabled: true,
+    cameraEnabled: false,
+    screenShareEnabled: false,
+    joinedAt: '2026-09-23T12:01:00Z',
+    lastSeenAt: '2026-09-23T12:01:01Z',
+  }];
+  mocks.speakingUserIds = [];
+  render(<WorkspaceShell currentUser={currentUser} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Comunidade' }));
+  const voiceChannel = await screen.findByRole('button', { name: 'Sala de voz' });
+  await waitFor(() => expect(voiceChannel.parentElement).toHaveTextContent('Bruno'));
+  fireEvent.click(voiceChannel);
+
+  await waitFor(() => expect(mocks.summaryEmitted).toHaveBeenCalled());
+  expect(await screen.findByRole('button', { name: 'Kaian (você)' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Configurar áudio de Bruno' })).toBeInTheDocument();
+});
+
+it('abre o volume do participante sob o canal somente após o clique e persiste o ajuste', async () => {
+  render(<WorkspaceShell currentUser={currentUser} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Comunidade' }));
+  const voiceChannel = await screen.findByRole('button', { name: 'Sala de voz' });
+  await waitFor(() => expect(voiceChannel.parentElement).toHaveTextContent('Bruno'));
+  expect(screen.queryByRole('slider', { name: 'Volume de Bruno' })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Configurar áudio de Bruno' }));
+  const volume = screen.getByRole('slider', { name: 'Volume de Bruno' });
+  fireEvent.change(volume, { target: { value: '0.4' } });
+
+  expect(window.localStorage.getItem('volume:user-2')).toBe('0.4');
+  expect(volume).toHaveValue('0.4');
+});
+
+it('controla a qualidade WebRTC pela engrenagem e mantém dispositivos sob os membros', async () => {
+  render(<WorkspaceShell currentUser={currentUser} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Comunidade' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Sala de voz' }));
+  const devices = await screen.findByRole('button', { name: 'Dispositivos de mídia' });
+  expect(devices.closest('aside')).toHaveAttribute('aria-label', 'Membros de Comunidade');
+
+  expect(screen.getByTestId('media-room')).toHaveAttribute('data-metrics', 'false');
+  fireEvent.click(screen.getByRole('button', { name: 'Abrir configurações' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mostrar qualidade WebRTC' }));
+  expect(screen.getByTestId('media-room')).toHaveAttribute('data-metrics', 'true');
 });
 
 it('mostra participantes sob o canal de voz e envia amizade pelo painel de membros sem depender de e-mail', async () => {
