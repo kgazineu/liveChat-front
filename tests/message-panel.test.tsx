@@ -71,6 +71,19 @@ beforeEach(() => {
   mocks.listener = null;
 });
 
+it('mantém o composer visível e limita o scroll ao histórico', async () => {
+  render(<MessagePanel currentUser={me} target={directTarget} />);
+
+  const composer = await screen.findByLabelText('Mensagem');
+  const panel = composer.closest('section');
+  const form = composer.closest('form');
+  const history = screen.getByLabelText('Histórico de mensagens');
+
+  expect(panel).toHaveClass('min-h-0', 'overflow-hidden');
+  expect(history).toHaveClass('min-h-0', 'flex-1', 'overflow-y-auto');
+  expect(form).toHaveClass('shrink-0', 'z-10');
+});
+
 it('usa o canal privado para histórico, envio e início de chamada', async () => {
   mocks.post.mockResolvedValue({ data: message({ id: 2, content: 'Mensagem enviada', authorId: me.id, authorName: me.name }) });
   render(<MessagePanel currentUser={me} target={directTarget} onStartCall={mocks.startCall} />);

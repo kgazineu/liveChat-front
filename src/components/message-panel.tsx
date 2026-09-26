@@ -327,7 +327,7 @@ function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelP
   }
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col bg-(--surface-main)">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-(--surface-main)">
       <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/6 px-5">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold text-white">
@@ -422,7 +422,7 @@ function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelP
           setDraggingFiles(false);
           addFiles(Array.from(event.dataTransfer.files));
         }}
-        className="shrink-0 px-4 pb-5 sm:px-8"
+        className="relative z-10 shrink-0 border-t border-white/6 bg-(--surface-main) px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 sm:px-8"
       >
         <div className={`relative mx-auto max-w-4xl rounded-2xl border bg-white/5 p-2 shadow-2xl shadow-black/10 transition focus-within:border-violet-400/50 ${draggingFiles ? 'border-violet-400 bg-violet-500/10' : 'border-white/8'}`}>
           {draggingFiles && (

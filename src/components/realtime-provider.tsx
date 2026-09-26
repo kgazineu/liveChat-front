@@ -1,7 +1,7 @@
 'use client';
 
 import { Client, ReconnectionTimeMode } from '@stomp/stompjs';
-import Cookies from 'js-cookie';
+
 import {
   createContext,
   useCallback,
@@ -14,7 +14,9 @@ import {
 } from 'react';
 import toast from 'react-hot-toast';
 import api from '@/src/services/api';
+import { showDesktopNotification } from '@/src/services/desktop';
 import { getRuntimeConfig } from '@/src/services/runtime-config';
+import { sessionAccessToken } from '@/src/services/session';
 import type {
   ChannelMessage,
   FriendshipEvent,
@@ -91,7 +93,7 @@ function notify<T>(body: string, guard: (value: unknown) => value is T, listener
   if (event) listeners.forEach(listener => listener(event));
 }
 
-export function RealtimeProvider({ children }: { children: ReactNode }) {
+export function RealtimeProvider({ children, currentUserId }: { children: ReactNode; currentUserId?: string }) {
   const [connected, setConnected] = useState(false);
   const [connectionRevision, setConnectionRevision] = useState(0);
   const messageListeners = useRef(new Set<Listener<ChannelMessage>>());
@@ -107,7 +109,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     async function connect() {
       try {
         const config = await getRuntimeConfig();
-        const token = Cookies.get('chat_token');
+        const token = await sessionAccessToken();
         if (!active || !token) return;
 
         client = new Client({
@@ -120,8 +122,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
           heartbeatIncoming: 10000,
           heartbeatOutgoing: 10000,
         });
-        client.beforeConnect = () => {
-          const currentToken = Cookies.get('chat_token');
+        client.beforeConnect = async () => {
+          const currentToken = await sessionAccessToken();
           if (!currentToken) {
             void client?.deactivate();
             return;
@@ -137,9 +139,28 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
               return;
             }
             messageListeners.current.forEach(listener => listener(message));
+            if (document.visibilityState !== 'visible' && String(message.authorId) !== String(currentUserId)) {
+              showDesktopNotification({
+                title: message.authorName,
+                body: message.content || 'Enviou um anexo',
+                kind: 'message',
+              });
+            }
           });
-          client!.subscribe('/user/queue/media-presence', frame =>
-            notify(frame.body, isPresenceEvent, presenceListeners.current));
+          client!.subscribe('/user/queue/media-presence', frame => {
+            const event = parseFrame(frame.body, isPresenceEvent);
+            if (!event) return;
+            presenceListeners.current.forEach(listener => listener(event));
+            if (event.type === 'media.participant.joined' &&
+              event.participant.channelKind === 'DIRECT' &&
+              String(event.participant.userId) !== String(currentUserId)) {
+              showDesktopNotification({
+                title: 'Chamada recebida',
+                body: `${event.participant.userName} entrou na chamada.`,
+                kind: 'call',
+              });
+            }
+          });
           client!.subscribe('/user/queue/friendships', frame =>
             notify(frame.body, isFriendshipEvent, friendshipListeners.current));
           client!.subscribe('/user/queue/server-invites', frame =>
@@ -171,7 +192,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       setConnected(false);
       void client?.deactivate();
     };
-  }, []);
+  }, [currentUserId]);
 
   const subscribeMessages = useCallback((listener: Listener<ChannelMessage>) => {
     messageListeners.current.add(listener);

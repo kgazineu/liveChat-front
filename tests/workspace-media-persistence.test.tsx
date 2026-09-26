@@ -212,6 +212,7 @@ it('mantém a sala de mídia ativa enquanto o usuário envia mensagens em outro 
   await waitFor(() => {
     expect(screen.getByTestId('message-panel')).toHaveTextContent('Mensagens em geral');
   });
+  expect(screen.getByTestId('message-panel').parentElement).toHaveClass('min-h-0', 'overflow-hidden');
   expect(screen.getByTestId('media-room')).toHaveAttribute('data-visible', 'false');
 
   fireEvent.click(screen.getByRole('button', { name: 'Sala de voz' }));

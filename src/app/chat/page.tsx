@@ -1,12 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import Cookies from 'js-cookie';
+
 import { useRouter } from 'next/navigation';
 import WorkspaceShell from '@/src/components/workspace-shell';
 import api from '@/src/services/api';
 import type { CurrentUser } from '@/src/types';
-import { clearSession } from '@/src/services/session';
+import { clearSession, hasRefreshSession, sessionAccessToken } from '@/src/services/session';
 
 export default function ChatPage() {
     const router = useRouter();
@@ -15,20 +15,27 @@ export default function ChatPage() {
     const [attempt, setAttempt] = useState(0);
 
     useEffect(() => {
-    const token = Cookies.get('chat_token');
-    const refreshToken = Cookies.get('chat_refresh_token');
+        let active = true;
+        const controller = new AbortController();
 
-    if (!token && !refreshToken) {
-        router.replace('/');
-        return;
-    }
+        async function loadCurrentUser() {
+            const [token, refreshAvailable] = await Promise.all([sessionAccessToken(), hasRefreshSession()]);
+            if (!active) return;
+            if (!token && !refreshAvailable) {
+                router.replace('/');
+                return;
+            }
 
-    let active = true;
-    const controller = new AbortController();
-    api.get<CurrentUser>('/users/me', { signal: controller.signal })
-        .then(res => { if (active) setCurrentUser(res.data); })
-        .catch(() => { if (active) setLoadError(true); });
-    return () => { active = false; controller.abort(); };
+            try {
+                const response = await api.get<CurrentUser>('/users/me', { signal: controller.signal });
+                if (active) setCurrentUser(response.data);
+            } catch {
+                if (active && !controller.signal.aborted) setLoadError(true);
+            }
+        }
+
+        void loadCurrentUser();
+        return () => { active = false; controller.abort(); };
     }, [router, attempt]);
 
 

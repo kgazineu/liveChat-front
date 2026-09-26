@@ -3,11 +3,12 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '@/src/services/api';
 import { Message, ChatWindowProps } from '@/src/types';
-import Cookies from 'js-cookie';
+
 import { Client } from '@stomp/stompjs';
 import toast from 'react-hot-toast';
 import { getRuntimeConfig } from '@/src/services/runtime-config';
 import { belongsToConversation, mergeMessages, parseMessage } from '@/src/services/messages';
+import { sessionAccessToken } from '@/src/services/session';
 
 
 export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProps) {
@@ -45,7 +46,7 @@ export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProp
             try {
                 const config = await getRuntimeConfig();
                 if (!active) return;
-                const token = Cookies.get('chat_token');
+                const token = await sessionAccessToken();
                 if (!token) return;
                 client = new Client({
                     brokerURL: config.brokerUrl,
@@ -55,8 +56,8 @@ export default function ChatWindow({ currentUser, selectedUser }: ChatWindowProp
                     heartbeatIncoming: 4000,
                     heartbeatOutgoing: 4000,
                 });
-                client.beforeConnect = () => {
-                    const currentToken = Cookies.get('chat_token');
+                client.beforeConnect = async () => {
+                    const currentToken = await sessionAccessToken();
                     if (!currentToken) { void client?.deactivate(); return; }
                     client!.connectHeaders = { Authorization: `Bearer ${currentToken}` };
                 };

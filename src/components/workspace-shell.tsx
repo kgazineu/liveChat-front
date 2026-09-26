@@ -12,6 +12,12 @@ import {
 } from 'react';
 import toast from 'react-hot-toast';
 import api from '@/src/services/api';
+import {
+  installDesktopUpdate,
+  subscribeDesktopCallOpen,
+  subscribeDesktopUpdateReady,
+  updateDesktopCallState,
+} from '@/src/services/desktop';
 import { errorMessage } from '@/src/services/errors';
 import { clearSession } from '@/src/services/session';
 import { fetchAllPages } from '@/src/services/pagination';
@@ -108,7 +114,7 @@ function belongsToServerVoice(event: MediaPresenceEvent) {
 
 export default function WorkspaceShell({ currentUser }: { currentUser: CurrentUser }) {
   return (
-    <RealtimeProvider>
+    <RealtimeProvider currentUserId={currentUser.id}>
       <Workspace currentUser={currentUser} />
     </RealtimeProvider>
   );
@@ -677,7 +683,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
       selectedTarget.channelId === activeMediaTarget.channelId)
   );
 
-  function openActiveMedia() {
+  const openActiveMedia = useCallback(() => {
     if (!activeMediaTarget) return;
     if (activeMediaTarget.kind === 'SERVER_VOICE') {
       setActiveServerId(activeMediaTarget.serverId);
@@ -695,7 +701,32 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
       });
     }
     setMobileSidebarOpen(false);
-  }
+  }, [activeMediaTarget, loadChannels, loadMembers]);
+
+  useEffect(() => {
+    updateDesktopCallState(activeMediaTarget !== null, activeMediaTarget?.title);
+    return () => updateDesktopCallState(false);
+  }, [activeMediaTarget]);
+
+  useEffect(() => subscribeDesktopCallOpen(openActiveMedia), [openActiveMedia]);
+
+  useEffect(() => subscribeDesktopUpdateReady(version => {
+    toast((toastInstance) => (
+      <div className="flex items-center gap-3">
+        <span>Atualização desktop {version} pronta.</span>
+        <button
+          type="button"
+          onClick={() => {
+            toast.dismiss(toastInstance.id);
+            void installDesktopUpdate();
+          }}
+          className="rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white"
+        >
+          Reiniciar
+        </button>
+      </div>
+    ), { duration: Infinity });
+  }), []);
 
   const handleMediaSummary = useCallback((summary: MediaRoomSummary) => {
     if (!activeMediaTarget || activeMediaTarget.kind !== 'SERVER_VOICE') {
@@ -878,7 +909,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
         )}
       </aside>
 
-      <main className="relative flex min-w-0 flex-1 flex-col bg-slate-950">
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-slate-950">
         <button
           type="button"
           onClick={() => setMobileSidebarOpen(true)}
