@@ -66,6 +66,20 @@ npm test
 npm run build
 ```
 
+## Integração desktop
+
+O shell Electron fica no repositório irmão `../live-chat-desktop` e carrega a URL web de produção. Quando `window.liveChatDesktop` está disponível, o frontend:
+
+- envia a sessão inicial para o processo principal;
+- lê o access token mantido somente em memória;
+- solicita ao processo principal a renovação com o refresh token protegido por `safeStorage`;
+- não grava tokens em cookies;
+- sincroniza o indicador de chamada ativa;
+- recebe ações de “voltar para a chamada” e “instalar atualização”;
+- solicita notificações nativas de mensagens e chamadas.
+
+No navegador comum, a ponte não existe e o fluxo web por cookies continua funcionando normalmente. O frontend nunca recebe `ipcRenderer`, filesystem ou `shell`.
+
 ## Contratos de tempo real
 
 O cliente abre uma única conexão STOMP autenticada por sessão e assina:

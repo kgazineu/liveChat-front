@@ -2,21 +2,31 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import toast from 'react-hot-toast';
 import AuthShell, {
   authInputClassName,
   authPrimaryButtonClassName,
 } from '@/src/components/auth-shell';
 import api from '@/src/services/api';
+import { desktopBridge } from '@/src/services/desktop';
 import { errorMessage } from '@/src/services/errors';
-import { persistSession, type SessionResponse } from '@/src/services/session';
+import { hasRefreshSession, persistSession, type SessionResponse } from '@/src/services/session';
 
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!desktopBridge()) return;
+    let active = true;
+    void hasRefreshSession().then(hasSession => {
+      if (active && hasSession) router.replace('/chat');
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [router]);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -36,7 +46,7 @@ export default function LoginPage() {
         email: normalizedEmail,
         password,
       });
-      persistSession(response.data);
+      await persistSession(response.data);
       toast.dismiss(loadingToast);
       toast.success('Bem-vindo de volta!');
       router.replace('/chat');

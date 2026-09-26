@@ -1,7 +1,14 @@
 import axios, { type InternalAxiosRequestConfig } from 'axios';
 import Cookies from 'js-cookie';
 import { getRuntimeConfig } from './runtime-config';
-import { clearSession, persistSession, type SessionResponse } from './session';
+import {
+    clearSession,
+    hasRefreshSession,
+    persistSession,
+    refreshDesktopAccessToken,
+    sessionAccessToken,
+    type SessionResponse,
+} from './session';
 import { enforceRateLimitCooldown, registerRateLimit } from './rate-limit';
 
 const api = axios.create({
@@ -11,7 +18,7 @@ const api = axios.create({
 api.interceptors.request.use(async (config) => {
     enforceRateLimitCooldown(config);
     config.baseURL = (await getRuntimeConfig()).apiUrl;
-    const token = Cookies.get('chat_token');
+    const token = await sessionAccessToken();
     if (token && !isPublicAuthRequest(config.url)) {
         config.headers.Authorization = `Bearer ${token}`;
     }
@@ -25,11 +32,13 @@ interface RetryableRequest extends InternalAxiosRequestConfig {
 let pendingRefresh: Promise<string> | undefined;
 
 async function refreshAccessToken() {
+    const desktopToken = await refreshDesktopAccessToken();
+    if (desktopToken) return desktopToken;
     const refreshToken = Cookies.get('chat_refresh_token');
     if (!refreshToken) throw new Error('Refresh token ausente.');
     const { apiUrl } = await getRuntimeConfig();
     const response = await axios.post<SessionResponse>(`${apiUrl}/users/refresh`, { refreshToken }, { timeout: 15000 });
-    persistSession(response.data);
+    await persistSession(response.data);
     return response.data.token;
 }
 
@@ -54,7 +63,7 @@ api.interceptors.response.use(
         const protectedRequest = config && !isPublicAuthRequest(config.url);
         if (error.response?.status !== 401 || !protectedRequest) return Promise.reject(error);
 
-        if (!config._sessionRetry && Cookies.get('chat_refresh_token')) {
+        if (!config._sessionRetry && await hasRefreshSession()) {
             config._sessionRetry = true;
             try {
                 pendingRefresh ??= refreshAccessToken().finally(() => { pendingRefresh = undefined; });
