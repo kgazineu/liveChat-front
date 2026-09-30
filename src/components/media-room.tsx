@@ -14,7 +14,9 @@ import {
   RoomEvent,
   Track,
   type Participant,
+  type RemoteAudioTrack,
   type RemoteTrack,
+  type ScreenShareCaptureOptions,
 } from 'livekit-client';
 import api from '@/src/services/api';
 import { errorMessage } from '@/src/services/errors';
@@ -101,6 +103,19 @@ const EMPTY_METRICS: WebRtcMetrics = {
   sampledAt: null,
 };
 
+export const SCREEN_SHARE_CAPTURE_OPTIONS = {
+  audio: true,
+  video: {
+    displaySurface: 'browser',
+  },
+  systemAudio: 'include',
+  surfaceSwitching: 'include',
+  selfBrowserSurface: 'exclude',
+} satisfies ScreenShareCaptureOptions;
+
+export const SCREEN_SHARE_WITHOUT_AUDIO_NOTICE =
+  'O compartilhamento começou sem áudio. Use Chrome, Edge ou o aplicativo desktop, selecione uma aba e marque “Compartilhar áudio da guia”.';
+
 let callAudioContext: AudioContext | null = null;
 
 export function prepareCallSounds() {
@@ -157,6 +172,24 @@ export function storeParticipantVolume(userId: string, volume: number) {
   const normalized = Math.min(1, Math.max(0, volume));
   try {
     window.localStorage.setItem(`volume:${userId}`, String(normalized));
+  } catch {
+    // O áudio continua funcional mesmo quando o armazenamento local está indisponível.
+  }
+  return normalized;
+}
+
+export function storedScreenShareVolume(userId: string) {
+  if (typeof window === 'undefined') return 100;
+  const rawVolume = window.localStorage.getItem(`screen-share-volume:${userId}`);
+  if (rawVolume == null) return 100;
+  const stored = Number(rawVolume);
+  return Number.isFinite(stored) && stored >= 0 && stored <= 100 ? stored : 100;
+}
+
+export function storeScreenShareVolume(userId: string, volume: number) {
+  const normalized = Math.min(100, Math.max(0, volume));
+  try {
+    window.localStorage.setItem(`screen-share-volume:${userId}`, String(normalized));
   } catch {
     // O áudio continua funcional mesmo quando o armazenamento local está indisponível.
   }
@@ -415,6 +448,7 @@ export function MediaRoom({
   const [localMedia, setLocalMedia] = useState<LocalMediaState>(EMPTY_MEDIA);
   const [activeSpeakers, setActiveSpeakers] = useState<Set<string>>(new Set());
   const [remoteAudioMuted, setRemoteAudioMuted] = useState(false);
+  const [screenShareVolumes, setScreenShareVolumes] = useState<Record<string, number>>({});
   const [devices, setDevices] = useState<DeviceLists>(EMPTY_DEVICES);
   const [selectedDevices, setSelectedDevices] = useState<DeviceSelection>(EMPTY_SELECTION);
   const [trackViews, setTrackViews] = useState<{ audio: TrackView[]; video: TrackView[] }>({ audio: [], video: [] });
@@ -474,6 +508,7 @@ export function MediaRoom({
       setConnectionState('loading');
       setLocalMedia(EMPTY_MEDIA);
       setActiveSpeakers(new Set());
+      setScreenShareVolumes({});
       setDevices(EMPTY_DEVICES);
       setSelectedDevices(EMPTY_SELECTION);
       setTrackViews({ audio: [], video: [] });
@@ -648,7 +683,17 @@ export function MediaRoom({
         void api.delete(endpoint).catch(() => undefined);
         refreshTrackViews();
       });
-      room.on(RoomEvent.TrackSubscribed, refreshTrackViews);
+      room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (
+          track.kind === Track.Kind.Audio &&
+          publication.source === Track.Source.ScreenShareAudio
+        ) {
+          (track as RemoteAudioTrack).setVolume(
+            storedScreenShareVolume(participant.identity) / 100,
+          );
+        }
+        refreshTrackViews();
+      });
       room.on(RoomEvent.TrackUnsubscribed, refreshTrackViews);
       room.on(RoomEvent.TrackMuted, refreshTrackViews);
       room.on(RoomEvent.TrackUnmuted, refreshTrackViews);
@@ -783,7 +828,17 @@ export function MediaRoom({
           selectedDevices.videoinput ? { deviceId: selectedDevices.videoinput } : undefined,
         );
       } else {
-        await room.localParticipant.setScreenShareEnabled(!localMediaRef.current.screenShareEnabled);
+        const enabled = !localMediaRef.current.screenShareEnabled;
+        await room.localParticipant.setScreenShareEnabled(
+          enabled,
+          enabled ? SCREEN_SHARE_CAPTURE_OPTIONS : undefined,
+        );
+        if (
+          enabled &&
+          !room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)
+        ) {
+          setNotice(SCREEN_SHARE_WITHOUT_AUDIO_NOTICE);
+        }
       }
 
       if (roomRef.current !== room) return;
@@ -799,6 +854,17 @@ export function MediaRoom({
     } finally {
       setBusyControl(null);
     }
+  }
+
+  function changeScreenShareVolume(userId: string, value: number) {
+    const volume = storeScreenShareVolume(userId, value);
+    setScreenShareVolumes(previous => ({ ...previous, [userId]: volume }));
+
+    const audioTrack = roomRef.current?.remoteParticipants
+      .get(userId)
+      ?.getTrackPublication(Track.Source.ScreenShareAudio)
+      ?.audioTrack as RemoteAudioTrack | undefined;
+    audioTrack?.setVolume(remoteAudioMuted ? 0 : volume / 100);
   }
 
   async function changeDevice(event: ChangeEvent<HTMLSelectElement>) {
@@ -842,6 +908,11 @@ export function MediaRoom({
   const expandedTrack = expandedTrackId
     ? trackViews.video.find(view => view.id === expandedTrackId) ?? null
     : null;
+  const screenShareAudioParticipantIds = new Set(
+    trackViews.audio
+      .filter(view => view.source === Track.Source.ScreenShareAudio)
+      .map(view => view.participantId),
+  );
   const visibleSessions = sessions.length
     ? sessions
     : connectionState === 'loading' || connectionState === 'connecting'
@@ -923,6 +994,14 @@ export function MediaRoom({
                   key={`${view.participantId}:${view.id}`}
                   view={view}
                   onExpand={() => setExpandedTrackId(view.id)}
+                  screenShareVolume={
+                    !view.local &&
+                    view.source === Track.Source.ScreenShare &&
+                    screenShareAudioParticipantIds.has(view.participantId)
+                      ? screenShareVolumes[view.participantId] ?? storedScreenShareVolume(view.participantId)
+                      : undefined
+                  }
+                  onScreenShareVolumeChange={value => changeScreenShareVolume(view.participantId, value)}
                 />
               ))}
             </div>
@@ -970,25 +1049,49 @@ export function MediaRoom({
           view={expandedTrack}
           onCloseAction={() => setExpandedTrackId(null)}
           onErrorAction={message => setNotice(message)}
+          screenShareVolume={
+            !expandedTrack.local &&
+            expandedTrack.source === Track.Source.ScreenShare &&
+            screenShareAudioParticipantIds.has(expandedTrack.participantId)
+              ? screenShareVolumes[expandedTrack.participantId] ?? storedScreenShareVolume(expandedTrack.participantId)
+              : undefined
+          }
+          onScreenShareVolumeChangeAction={value => changeScreenShareVolume(expandedTrack.participantId, value)}
         />
       )}
 
       <div className="hidden" aria-hidden="true">
-        {trackViews.audio.map(view => (
-          <RemoteAudioTrackElement
-            key={`${view.participantId}:${view.id}`}
-            track={view.track as RemoteTrack}
-            muted={remoteAudioMuted}
-            volume={participantVolumes[view.participantId] ?? storedParticipantVolume(view.participantId)}
-            onBlocked={markAutoplayBlocked}
-          />
-        ))}
+        {trackViews.audio.map(view => {
+          const screenShareAudio = view.source === Track.Source.ScreenShareAudio;
+          const volume = screenShareAudio
+            ? (screenShareVolumes[view.participantId] ?? storedScreenShareVolume(view.participantId)) / 100
+            : participantVolumes[view.participantId] ?? storedParticipantVolume(view.participantId);
+          return (
+            <RemoteAudioTrackElement
+              key={`${view.participantId}:${view.id}`}
+              track={view.track as RemoteTrack}
+              muted={remoteAudioMuted}
+              volume={volume}
+              onBlocked={markAutoplayBlocked}
+            />
+          );
+        })}
       </div>
     </>
   );
 }
 
-function VideoTrackTile({ view, onExpand }: { view: TrackView; onExpand: () => void }) {
+function VideoTrackTile({
+  view,
+  onExpand,
+  screenShareVolume,
+  onScreenShareVolumeChange,
+}: {
+  view: TrackView;
+  onExpand: () => void;
+  screenShareVolume?: number;
+  onScreenShareVolumeChange: (value: number) => void;
+}) {
   const elementRef = useRef<HTMLVideoElement>(null);
   const isScreenShare = view.source === Track.Source.ScreenShare;
 
@@ -1014,6 +1117,16 @@ function VideoTrackTile({ view, onExpand }: { view: TrackView; onExpand: () => v
           ⛶ {isScreenShare ? 'Ampliar compartilhamento' : 'Ampliar câmera'}
         </span>
       </button>
+      {screenShareVolume != null && (
+        <div className="absolute inset-x-3 bottom-12 z-30">
+          <ScreenShareVolumeControl
+            participantName={view.participantName}
+            volume={screenShareVolume}
+            onChangeAction={onScreenShareVolumeChange}
+            compact
+          />
+        </div>
+      )}
       <figcaption className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-center justify-between gap-2 bg-linear-to-t from-black/80 to-transparent px-3 pb-3 pt-8 text-xs">
         <span className="truncate font-medium">{view.local ? 'Você' : view.participantName}</span>
         <span className="rounded-full bg-black/50 px-2 py-1 text-slate-300">
@@ -1028,10 +1141,14 @@ export function ScreenShareViewer({
   view,
   onCloseAction,
   onErrorAction,
+  screenShareVolume,
+  onScreenShareVolumeChangeAction,
 }: {
   view: TrackView;
   onCloseAction: () => void;
   onErrorAction: (message: string) => void;
+  screenShareVolume?: number;
+  onScreenShareVolumeChangeAction?: (value: number) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1076,7 +1193,14 @@ export function ScreenShareViewer({
           <p className="truncate text-sm font-semibold text-white">{mediaLabel} de {view.local ? 'você' : view.participantName}</p>
           <p className="text-xs text-slate-500">Visualização ampliada</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {isScreenShare && screenShareVolume != null && onScreenShareVolumeChangeAction && (
+            <ScreenShareVolumeControl
+              participantName={view.participantName}
+              volume={screenShareVolume}
+              onChangeAction={onScreenShareVolumeChangeAction}
+            />
+          )}
           <button
             type="button"
             onClick={() => void enterFullscreen()}
@@ -1098,6 +1222,43 @@ export function ScreenShareViewer({
         <video ref={videoRef} autoPlay playsInline muted={view.local} className="h-full w-full object-contain" />
       </div>
     </div>
+  );
+}
+
+export function ScreenShareVolumeControl({
+  participantName,
+  volume,
+  onChangeAction,
+  compact = false,
+}: {
+  participantName: string;
+  volume: number;
+  onChangeAction: (value: number) => void;
+  compact?: boolean;
+}) {
+  const normalized = Math.min(100, Math.max(0, volume));
+
+  return (
+    <label className={`block rounded-xl border border-white/10 bg-slate-950/90 shadow-lg backdrop-blur ${compact ? 'px-3 py-2' : 'min-w-56 px-3 py-2'}`}>
+      <span className="flex items-center justify-between gap-3 text-[11px] font-medium text-slate-300">
+        <span className="truncate">Transmissão de {participantName}</span>
+        <span className="shrink-0 tabular-nums text-slate-400">{Math.round(normalized)}%</span>
+      </span>
+      <span className="mt-1.5 flex items-center gap-2">
+        <span aria-hidden="true" className="text-xs text-slate-400">🔇</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={normalized}
+          onChange={event => onChangeAction(Number(event.currentTarget.value))}
+          className="h-1.5 min-w-24 flex-1 cursor-pointer accent-violet-500"
+          aria-label={`Volume da transmissão de ${participantName}`}
+        />
+        <span aria-hidden="true" className="text-xs text-slate-400">🔊</span>
+      </span>
+    </label>
   );
 }
 
@@ -1127,8 +1288,10 @@ function RemoteAudioTrackElement({
   useEffect(() => {
     const element = elementRef.current;
     if (!element) return;
+    const normalized = muted ? 0 : Math.min(1, Math.max(0, volume));
+    (track as RemoteAudioTrack).setVolume(normalized);
     applyRemoteAudioSettings(element, muted, volume);
-  }, [muted, volume]);
+  }, [muted, track, volume]);
 
   return <audio ref={elementRef} autoPlay />;
 }

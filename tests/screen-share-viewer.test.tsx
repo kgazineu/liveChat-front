@@ -49,6 +49,35 @@ it('anexa o compartilhamento, permite tela cheia e remove a faixa ao fechar', ()
   expect(track.detach).toHaveBeenCalledWith(expect.any(HTMLVideoElement));
 });
 
+it('permite ajustar somente o volume do áudio da transmissão', () => {
+  const track = { attach: vi.fn(), detach: vi.fn() } as unknown as RemoteVideoTrack;
+  const changeVolume = vi.fn();
+
+  render(
+    <ScreenShareViewer
+      view={{
+        id: 'screen-track',
+        track,
+        participantId: 'user-2',
+        participantName: 'Bruno',
+        source: Track.Source.ScreenShare,
+        local: false,
+      }}
+      screenShareVolume={70}
+      onScreenShareVolumeChangeAction={changeVolume}
+      onCloseAction={vi.fn()}
+      onErrorAction={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText('Transmissão de Bruno')).toBeInTheDocument();
+  expect(screen.getByText('70%')).toBeInTheDocument();
+  fireEvent.change(screen.getByRole('slider', { name: 'Volume da transmissão de Bruno' }), {
+    target: { value: '35' },
+  });
+  expect(changeVolume).toHaveBeenCalledWith(35);
+});
+
 it('fecha a visualização ampliada com Escape quando não está em fullscreen', () => {
   const track = { attach: vi.fn(), detach: vi.fn() } as unknown as RemoteVideoTrack;
   const close = vi.fn();
