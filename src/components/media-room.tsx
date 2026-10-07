@@ -118,6 +118,27 @@ export const SCREEN_SHARE_WITHOUT_AUDIO_NOTICE =
 
 let callAudioContext: AudioContext | null = null;
 
+// A presença no backend é uma por usuário, não por montagem. Uma montagem descartada (React StrictMode,
+// nova tentativa) não pode encerrar a sessão que a montagem seguinte do mesmo canal continua usando.
+const mountedRooms = new Map<string, number>();
+
+function retainRoom(endpoint: string) {
+  mountedRooms.set(endpoint, (mountedRooms.get(endpoint) ?? 0) + 1);
+}
+
+function releaseRoom(endpoint: string) {
+  const remaining = (mountedRooms.get(endpoint) ?? 1) - 1;
+  if (remaining > 0) mountedRooms.set(endpoint, remaining);
+  else mountedRooms.delete(endpoint);
+}
+
+function leaveRoomIfUnused(endpoint: string) {
+  // Adiado para depois do commit: uma remontagem imediata já terá se registrado.
+  window.setTimeout(() => {
+    if (!mountedRooms.has(endpoint)) void api.delete(endpoint).catch(() => undefined);
+  }, 0);
+}
+
 export function prepareCallSounds() {
   if (typeof window === 'undefined' || !window.AudioContext) return null;
 
@@ -435,13 +456,15 @@ export function MediaRoom({
   participantVolumes?: Record<string, number>;
   devicePanelTarget?: HTMLElement | null;
 }) {
-  const { connected: realtimeConnected, subscribePresence } = useRealtime();
+  const { connected: realtimeConnected, connectionRevision, subscribePresence } = useRealtime();
   const endpoint = useMemo(() => mediaSessionsEndpoint(target), [target]);
   const roomRef = useRef<Room | null>(null);
   const connectionRef = useRef<LiveKitConnection | null>(null);
   const endpointRef = useRef(endpoint);
   const localMediaRef = useRef<LocalMediaState>(EMPTY_MEDIA);
   const previousBytesRef = useRef(new Map<string, PreviousByteSample>());
+  const joinedRef = useRef(false);
+  const connectionRevisionRef = useRef(connectionRevision);
 
   const [sessions, setSessions] = useState<MediaSession[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionUiState>('loading');
@@ -500,6 +523,7 @@ export function MediaRoom({
     const speakerClearTimers = new Map<string, number>();
     let leaveSoundPlayed = false;
 
+    retainRoom(endpoint);
     localMediaRef.current = EMPTY_MEDIA;
     previousBytes.clear();
     queueMicrotask(() => {
@@ -639,9 +663,10 @@ export function MediaRoom({
       if (!active) {
         joined = false;
         credential = null;
-        void api.delete(endpoint).catch(() => undefined);
+        leaveRoomIfUnused(endpoint);
         return;
       }
+      joinedRef.current = true;
       if (!credential?.url || !credential.token) {
         joined = false;
         credential = null;
@@ -670,6 +695,7 @@ export function MediaRoom({
       room.on(RoomEvent.Disconnected, () => {
         if (!active) return;
         joined = false;
+        joinedRef.current = false;
         if (!leaveSoundPlayed) {
           leaveSoundPlayed = true;
           playCallSound('leave');
@@ -743,6 +769,7 @@ export function MediaRoom({
       } catch (error) {
         if (!active) return;
         joined = false;
+        joinedRef.current = false;
         connectionRef.current = null;
         credential = null;
         if (roomRef.current === room) roomRef.current = null;
@@ -757,6 +784,8 @@ export function MediaRoom({
 
     return () => {
       active = false;
+      joinedRef.current = false;
+      releaseRoom(endpoint);
       controller.abort();
       unsubscribePresence();
       connectionRef.current = null;
@@ -768,10 +797,24 @@ export function MediaRoom({
       if (room) void room.disconnect(true);
       if (joined) {
         if (!leaveSoundPlayed) playCallSound('leave');
-        void api.delete(endpoint).catch(() => undefined);
+        leaveRoomIfUnused(endpoint);
       }
     };
   }, [applyOwnPresence, currentUser.id, endpoint, retry, subscribePresence, target]);
+
+  // Uma queda só do STOMP marca a presença como reconectando; entrar de novo é idempotente e a reativa.
+  useEffect(() => {
+    if (connectionRevisionRef.current === connectionRevision) return;
+    connectionRevisionRef.current = connectionRevision;
+    if (!joinedRef.current) return;
+    void api.post<MediaSession>(endpoint)
+      .then(response => {
+        if (joinedRef.current && response.data && typeof response.data === 'object') {
+          applyOwnPresence({}, withoutConnection(response.data));
+        }
+      })
+      .catch(() => undefined);
+  }, [applyOwnPresence, connectionRevision, endpoint]);
 
   useEffect(() => {
     onSummaryAction?.({
