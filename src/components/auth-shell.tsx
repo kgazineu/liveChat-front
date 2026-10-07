@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
 
 export const authInputClassName =
-  'w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-white shadow-inner shadow-black/20 outline-none transition placeholder:text-slate-600 hover:border-white/15 focus:border-violet-400/70 focus:ring-4 focus:ring-violet-500/10 disabled:cursor-not-allowed disabled:opacity-60';
+  'h-10 w-full rounded-[3px] bg-floating px-2.5 text-base text-text outline-none transition placeholder:text-faint focus:ring-2 focus:ring-link/70 disabled:cursor-not-allowed disabled:opacity-60';
 
 export const authPrimaryButtonClassName =
-  'inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-cyan-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-950/30 transition hover:from-violet-500 hover:to-cyan-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 disabled:cursor-not-allowed disabled:opacity-60 disabled:saturate-50';
+  'inline-flex h-11 w-full items-center justify-center gap-2 rounded-[3px] bg-brand px-4 text-base font-medium text-white transition hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-60';
 
 type AuthShellProps = {
   eyebrow: string;
@@ -16,87 +16,61 @@ type AuthShellProps = {
 
 function BrandMark() {
   return (
-    <span className="grid size-10 place-items-center rounded-xl border border-violet-400/25 bg-gradient-to-br from-violet-500/25 to-cyan-400/15 shadow-lg shadow-violet-950/30">
-      <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 text-violet-200" fill="none">
+    <span className="grid size-9 place-items-center rounded-xl bg-white text-brand shadow-lg">
+      <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5" fill="none">
         <path
           d="M5.5 6.75h13v8.5h-7.1L7.25 18.5v-3.25H5.5v-8.5Z"
           stroke="currentColor"
-          strokeWidth="1.7"
+          strokeWidth="2"
           strokeLinejoin="round"
         />
-        <path d="M9 10.9h.01M12 10.9h.01M15 10.9h.01" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        <path d="M9 10.9h.01M12 10.9h.01M15 10.9h.01" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
       </svg>
     </span>
   );
 }
 
+/**
+ * Cartão centralizado sobre um fundo ilustrado, como as telas de entrada dos clientes de comunidade.
+ * Em telas pequenas o cartão ocupa a tela inteira, sem moldura.
+ */
 export default function AuthShell({ eyebrow, title, description, children, footer }: AuthShellProps) {
   return (
-    <main className="relative min-h-svh overflow-hidden bg-[#070a12] text-slate-100">
+    <main className="relative flex min-h-svh items-center justify-center overflow-hidden bg-[#3b2fb8] text-text sm:p-6">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-        <div className="absolute -left-40 -top-40 size-[32rem] rounded-full bg-violet-600/15 blur-3xl" />
-        <div className="absolute -bottom-48 -right-32 size-[34rem] rounded-full bg-cyan-500/10 blur-3xl" />
-        <div className="absolute inset-0 opacity-[0.035] [background-image:linear-gradient(rgba(255,255,255,.6)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.6)_1px,transparent_1px)] [background-size:48px_48px]" />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,#6e5df6_0%,transparent_45%),radial-gradient(circle_at_80%_85%,#0ea5a4_0%,transparent_40%),linear-gradient(135deg,#2a1f8f,#3b2fb8_45%,#24206b)]" />
+        <svg className="absolute inset-0 h-full w-full opacity-[0.12]" preserveAspectRatio="none" viewBox="0 0 1440 900">
+          <path d="M0 640 C 240 560 420 720 720 650 S 1200 520 1440 600 L1440 900 L0 900 Z" fill="#fff" />
+          <path d="M0 720 C 300 680 520 800 820 740 S 1240 660 1440 700 L1440 900 L0 900 Z" fill="#fff" opacity="0.6" />
+        </svg>
+        <div className="absolute left-[8%] top-[14%] size-3 rounded-full bg-white/40" />
+        <div className="absolute right-[12%] top-[22%] size-2 rounded-full bg-white/50" />
+        <div className="absolute bottom-[18%] left-[18%] size-2 rounded-full bg-white/30" />
       </div>
 
-      <div className="relative mx-auto grid min-h-svh w-full max-w-7xl items-center gap-10 px-5 py-8 sm:px-8 lg:grid-cols-[1.08fr_0.92fr] lg:gap-16 lg:px-12">
-        <section className="mx-auto w-full max-w-2xl lg:mx-0" aria-labelledby="auth-brand-heading">
-          <div className="mb-8 flex items-center gap-3">
-            <BrandMark />
-            <div>
-              <p className="text-sm font-semibold tracking-wide text-white">LiveChat</p>
-              <p className="text-xs text-slate-500">Sua comunidade, ao vivo.</p>
-            </div>
-          </div>
-
-          <div className="max-w-xl">
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-cyan-300/15 bg-cyan-300/5 px-3 py-1.5 text-xs font-medium text-cyan-200">
-              <span className="size-1.5 rounded-full bg-cyan-300 shadow-[0_0_12px_currentColor]" />
-              Conversas em tempo real
-            </div>
-            <h1 id="auth-brand-heading" className="text-3xl font-semibold leading-tight tracking-[-0.035em] text-white sm:text-4xl lg:text-6xl">
-              O lugar onde sua comunidade{' '}
-              <span className="bg-gradient-to-r from-violet-300 via-fuchsia-200 to-cyan-300 bg-clip-text text-transparent">
-                acontece.
-              </span>
-            </h1>
-            <p className="mt-5 max-w-lg text-sm leading-7 text-slate-400 sm:text-base">
-              Entre em canais, converse com seus amigos e mantenha tudo que importa perto de você.
-            </p>
-          </div>
-
-          <div className="mt-10 hidden max-w-lg grid-cols-3 gap-3 lg:grid">
-            {[
-              ['# geral', 'Comunidades'],
-              ['● online', 'Presença ao vivo'],
-              ['↗ agora', 'Conexão rápida'],
-            ].map(([value, label]) => (
-              <div key={label} className="rounded-2xl border border-white/[0.07] bg-white/[0.035] p-4 backdrop-blur-sm">
-                <p className="font-mono text-xs text-violet-200">{value}</p>
-                <p className="mt-2 text-xs text-slate-500">{label}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="mx-auto w-full max-w-md" aria-labelledby="auth-form-heading">
-          <div className="relative rounded-[1.75rem] border border-white/10 bg-slate-900/70 p-1 shadow-2xl shadow-black/40 backdrop-blur-xl">
-            <div aria-hidden="true" className="absolute inset-x-10 top-0 h-px bg-gradient-to-r from-transparent via-violet-300/80 to-transparent" />
-            <div className="rounded-[1.5rem] border border-white/[0.045] bg-[#0b0f1a]/90 px-5 py-7 sm:px-8 sm:py-9">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">{eyebrow}</p>
-              <h2 id="auth-form-heading" className="mt-3 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
-                {title}
-              </h2>
-              <p className="mt-3 text-sm leading-6 text-slate-400">{description}</p>
-
-              <div className="mt-7">{children}</div>
-
-              {footer ? <div className="mt-7 border-t border-white/[0.07] pt-6">{footer}</div> : null}
-            </div>
-          </div>
-          <p className="mt-5 text-center text-xs text-slate-600">Conexão protegida para suas conversas.</p>
-        </section>
+      <div className="absolute left-6 top-6 hidden items-center gap-2.5 sm:flex">
+        <BrandMark />
+        <span className="text-lg font-bold tracking-tight text-white">LiveChat</span>
       </div>
+
+      <section
+        className="relative w-full min-h-svh bg-main px-5 py-10 sm:min-h-0 sm:max-w-[480px] sm:animate-pop-in sm:rounded-md sm:p-8 sm:shadow-[0_2px_10px_0_rgba(0,0,0,0.2)]"
+        aria-labelledby="auth-form-heading"
+      >
+        <div className="mb-6 flex items-center justify-center gap-2 sm:hidden">
+          <BrandMark />
+          <span className="text-lg font-bold text-white">LiveChat</span>
+        </div>
+        <header className="text-center">
+          <p className="sr-only">{eyebrow}</p>
+          <h1 id="auth-form-heading" className="text-2xl font-semibold text-header">{title}</h1>
+          <p className="mt-2 text-base text-muted">{description}</p>
+        </header>
+
+        <div className="mt-5">{children}</div>
+
+        {footer ? <div className="mt-3">{footer}</div> : null}
+      </section>
     </main>
   );
 }

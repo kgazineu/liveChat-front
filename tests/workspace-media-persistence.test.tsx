@@ -62,14 +62,14 @@ vi.mock('@/src/components/media-room', () => ({
     onSummaryAction,
     showMetrics,
     participantVolumes,
-    devicePanelTarget,
+    voicePanelTarget,
   }: {
     target: MediaTarget;
     visible: boolean;
     onSummaryAction?: (summary: { sessions: MediaSession[]; speakingUserIds: string[] }) => void;
     showMetrics?: boolean;
     participantVolumes?: Record<string, number>;
-    devicePanelTarget?: HTMLElement | null;
+    voicePanelTarget?: HTMLElement | null;
   }) => {
     useEffect(() => {
       if (target.kind !== 'SERVER_VOICE') return;
@@ -89,7 +89,7 @@ vi.mock('@/src/components/media-room', () => ({
         >
           Chamada em {target.title}
         </div>
-        {devicePanelTarget && createPortal(<button type="button">Dispositivos de mídia</button>, devicePanelTarget)}
+        {voicePanelTarget && createPortal(<button type="button">Dispositivos de mídia</button>, voicePanelTarget)}
       </>
     );
   },
@@ -264,18 +264,42 @@ it('abre o volume do participante sob o canal somente após o clique e persiste 
   expect(volume).toHaveValue('0.4');
 });
 
-it('controla a qualidade WebRTC pela engrenagem e mantém dispositivos sob os membros', async () => {
+it('controla a qualidade WebRTC pela engrenagem e mostra a conexão de voz na barra de canais', async () => {
   render(<WorkspaceShell currentUser={currentUser} />);
 
   fireEvent.click(await screen.findByRole('button', { name: 'Comunidade' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Sala de voz' }));
   const devices = await screen.findByRole('button', { name: 'Dispositivos de mídia' });
-  expect(devices.closest('aside')).toHaveAttribute('aria-label', 'Membros de Comunidade');
+  expect(devices.closest('aside')).toHaveAttribute('aria-label', 'Canais de Comunidade');
 
   expect(screen.getByTestId('media-room')).toHaveAttribute('data-metrics', 'false');
   fireEvent.click(screen.getByRole('button', { name: 'Abrir configurações' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Mostrar qualidade WebRTC' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Mostrar qualidade WebRTC' }));
   expect(screen.getByTestId('media-room')).toHaveAttribute('data-metrics', 'true');
+});
+
+it('abre o primeiro canal de texto ao entrar no servidor e lembra a escolha', async () => {
+  render(<WorkspaceShell currentUser={currentUser} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Comunidade' }));
+
+  expect(await screen.findByTestId('message-panel')).toHaveTextContent('Mensagens em geral');
+  expect(window.localStorage.getItem('ui:last-channel:server-1')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'geral' }));
+  expect(window.localStorage.getItem('ui:last-channel:server-1')).toBe('text-1');
+});
+
+it('mantém as preferências de microfone e áudio da barra do usuário', async () => {
+  render(<WorkspaceShell currentUser={currentUser} />);
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Silenciar microfone' }));
+  expect(screen.getByRole('button', { name: 'Ativar microfone' })).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: 'Desativar áudio' }));
+  expect(screen.getByRole('button', { name: 'Ativar áudio' })).toHaveAttribute('aria-pressed', 'true');
+  expect(JSON.parse(window.localStorage.getItem('ui:voice-preferences') ?? '{}')).toEqual({ microphoneMuted: true, deafened: true });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Ativar microfone' }));
+  expect(JSON.parse(window.localStorage.getItem('ui:voice-preferences') ?? '{}')).toEqual({ microphoneMuted: false, deafened: false });
 });
 
 it('mostra participantes sob o canal de voz e envia amizade pelo painel de membros sem depender de e-mail', async () => {
@@ -288,6 +312,8 @@ it('mostra participantes sob o canal de voz e envia amizade pelo painel de membr
   fireEvent.click(voiceChannel);
   expect(await screen.findByLabelText('Bruno está falando')).toBeInTheDocument();
 
+  // A lista de membros acompanha os canais de texto; a chamada continua ativa em segundo plano.
+  fireEvent.click(screen.getByRole('button', { name: 'geral' }));
   fireEvent.click(await screen.findByRole('button', { name: 'Ver Bruno' }));
   fireEvent.click(screen.getByRole('button', { name: 'Adicionar amigo' }));
 

@@ -1,175 +1,224 @@
 @import "tailwindcss";
 
+/*
+ * Paleta inspirada em clientes de comunidade (rail escuro, barra lateral intermediária, conteúdo mais claro).
+ * As cores ficam em tokens para que componentes usem nomes semânticos (bg-sidebar, text-muted…).
+ */
 :root {
-  --background: #070a12;
-  --foreground: #e8edf7;
-  --surface-main: #0b0f1a;
-  --surface-raised: #111827;
-  --accent: #8b5cf6;
+  --rail: #1e1f22;
+  --sidebar: #2b2d31;
+  --main: #313338;
+  --panel: #232428;
+  --floating: #111214;
+  --input: #383a40;
+  --hover: #35373c;
+  --selected: #404249;
+  --message-hover: #2e3035;
+  --divider: #3f4147;
+
+  --text: #dbdee1;
+  --text-muted: #949ba4;
+  --text-faint: #80848e;
+  --header: #f2f3f5;
+  --interactive: #b5bac1;
+
+  --brand: #6e5df6;
+  --brand-hover: #5d4bec;
+  --success: #23a55a;
+  --success-hover: #1a8b4b;
+  --danger: #f23f43;
+  --danger-hover: #da373c;
+  --warning: #f0b232;
+  --link: #00a8fc;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-rail: var(--rail);
+  --color-sidebar: var(--sidebar);
+  --color-main: var(--main);
+  --color-panel: var(--panel);
+  --color-floating: var(--floating);
+  --color-input: var(--input);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-message-hover: var(--message-hover);
+  --color-divider: var(--divider);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-faint: var(--text-faint);
+  --color-header: var(--header);
+  --color-interactive: var(--interactive);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-success: var(--success);
+  --color-success-hover: var(--success-hover);
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-warning: var(--warning);
+  --color-link: var(--link);
+  --font-sans: var(--font-app-sans);
+  --font-mono: var(--font-app-mono);
+  --animate-pop-in: pop-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-fade-in: fade-in 120ms ease-out;
+  --animate-slide-up: slide-up 160ms ease-out;
 }
 
-* {
-  box-sizing: border-box;
-  scrollbar-width: thin;
-  scrollbar-color: rgb(71 85 105 / 0.65) transparent;
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1); }
 }
 
-html,
-body {
-  min-height: 100%;
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-body {
-  margin: 0;
-  background:
-    radial-gradient(circle at 15% 0%, rgb(124 58 237 / 0.09), transparent 32rem),
-    var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-}
-
-button:not(:disabled) {
-  cursor: pointer;
-}
-
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  outline: 2px solid rgb(167 139 250 / 0.9);
-  outline-offset: 2px;
-}
-
-::selection {
-  background: rgb(139 92 246 / 0.35);
-  color: white;
-}
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  border: 1px solid;
-  border-radius: 9999px;
-  padding: 0.32rem 0.65rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.status-online {
-  border-color: rgb(52 211 153 / 0.2);
-  background: rgb(52 211 153 / 0.08);
-  color: rgb(110 231 183);
-}
-
-.status-warning {
-  border-color: rgb(251 191 36 / 0.2);
-  background: rgb(251 191 36 / 0.08);
-  color: rgb(252 211 77);
-}
-
-.status-dot {
-  width: 0.4rem;
-  height: 0.4rem;
-  border-radius: 9999px;
-  background: currentColor;
-  box-shadow: 0 0 0.6rem currentColor;
-}
-
-.message-row {
-  display: flex;
-  max-width: min(78%, 46rem);
-  align-items: flex-start;
-  gap: 0.7rem;
-}
-
-.message-row-mine {
-  align-self: flex-end;
-  flex-direction: row-reverse;
-}
-
-.message-avatar {
-  display: grid;
-  width: 2rem;
-  height: 2rem;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 0.7rem;
-  background: linear-gradient(135deg, rgb(139 92 246 / 0.28), rgb(6 182 212 / 0.18));
-  color: rgb(221 214 254);
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.message-bubble {
-  width: fit-content;
-  max-width: 100%;
-  border: 1px solid rgb(255 255 255 / 0.06);
-  border-radius: 0.4rem 1rem 1rem 1rem;
-  background: rgb(255 255 255 / 0.055);
-  padding: 0.62rem 0.85rem;
-  color: rgb(226 232 240);
-  font-size: 0.9rem;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.message-bubble-mine {
-  margin-left: auto;
-  border-color: rgb(139 92 246 / 0.22);
-  border-radius: 1rem 0.4rem 1rem 1rem;
-  background: linear-gradient(135deg, rgb(109 40 217 / 0.85), rgb(124 58 237 / 0.72));
-  color: white;
-}
-
-.icon-button {
-  display: grid;
-  width: 2.5rem;
-  height: 2.5rem;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 0.8rem;
-  transition: background-color 150ms ease, opacity 150ms ease, transform 150ms ease;
-}
-
-.icon-button-primary {
-  background: rgb(124 58 237);
-  color: white;
-}
-
-.icon-button-primary:not(:disabled):hover {
-  background: rgb(139 92 246);
-  transform: translateY(-1px);
-}
-
-.icon-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.4;
-}
-
-@media (max-width: 640px) {
-  .message-row {
-    max-width: 92%;
+/* Regras de elemento ficam na camada base para que os utilitários do Tailwind continuem prevalecendo. */
+@layer base {
+  * {
+    box-sizing: border-box;
+    scrollbar-width: thin;
+    scrollbar-color: #1a1b1e transparent;
   }
 
-  .status-pill {
-    padding-inline: 0.5rem;
-    font-size: 0;
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background: #1a1b1e padding-box;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  html,
+  body {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--main);
+    color: var(--text);
+    font-family: var(--font-app-sans), "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid #00a8fc;
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: rgb(110 93 246 / 0.45);
+    color: white;
+  }
+
+  input[type="range"] {
+    accent-color: var(--brand);
+  }
+}
+
+/* Tooltip leve para ícones (rail de servidores, botões de ação). */
+.tooltip {
+  pointer-events: none;
+  position: absolute;
+  z-index: 60;
+  white-space: nowrap;
+  border-radius: 0.375rem;
+  background: var(--floating);
+  padding: 0.4rem 0.7rem;
+  color: var(--header);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+  box-shadow: 0 8px 16px rgb(0 0 0 / 0.24);
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 90ms ease, transform 90ms ease;
+}
+
+.tooltip-right {
+  left: calc(100% + 14px);
+  top: 50%;
+  transform: translateY(-50%) scale(0.96);
+}
+
+.tooltip-right::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  background: var(--floating);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.tooltip-top {
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.96);
+}
+
+.tooltip-top::after {
+  content: "";
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background: var(--floating);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.has-tooltip:hover > .tooltip,
+.has-tooltip:focus-visible > .tooltip {
+  opacity: 1;
+}
+
+.has-tooltip:hover > .tooltip-right,
+.has-tooltip:focus-visible > .tooltip-right {
+  transform: translateY(-50%) scale(1);
+}
+
+.has-tooltip:hover > .tooltip-top,
+.has-tooltip:focus-visible > .tooltip-top {
+  transform: translateX(-50%) scale(1);
+}
+
+/* Linhas de mensagem com hover suave e horário revelado nas mensagens agrupadas. */
+.message-line:hover {
+  background: var(--message-hover);
+}
+
+.message-line .message-hover-time {
+  opacity: 0;
+}
+
+.message-line:hover .message-hover-time {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
   }
 }

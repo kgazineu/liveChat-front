@@ -63,9 +63,9 @@ function PasswordResetForm() {
       title="Defina uma nova senha"
       description="Escolha uma senha nova para recuperar o acesso às suas conversas."
       footer={
-        <p className="text-center text-sm text-slate-400">
+        <p className="text-sm text-muted">
           Precisa de um novo link?{' '}
-          <Link href="/forgot-password" className="font-semibold text-violet-300 transition hover:text-violet-200 hover:underline">
+          <Link href="/forgot-password" className="font-medium text-link hover:underline">
             Solicitar novamente
           </Link>
         </p>
@@ -73,13 +73,13 @@ function PasswordResetForm() {
     >
       <form onSubmit={handleReset} className="space-y-5">
         {!token ? (
-          <div role="alert" className="rounded-xl border border-amber-300/20 bg-amber-300/6 px-4 py-3 text-sm leading-6 text-amber-100">
+          <div role="alert" className="rounded border border-warning/40 bg-warning/10 px-4 py-3 text-sm leading-6 text-text">
             Este link não contém um token válido. Solicite uma nova recuperação de senha.
           </div>
         ) : null}
 
         <div>
-          <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-200">
+          <label htmlFor="password" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
             Nova senha
           </label>
           <input
@@ -99,7 +99,7 @@ function PasswordResetForm() {
         </div>
 
         <div>
-          <label htmlFor="password-confirmation" className="mb-2 block text-sm font-medium text-slate-200">
+          <label htmlFor="password-confirmation" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
             Confirme a nova senha
           </label>
           <input
@@ -140,8 +140,8 @@ function PasswordResetFallback() {
       title="Validando seu link"
       description="Aguarde enquanto preparamos a redefinição da sua senha."
     >
-      <div role="status" aria-live="polite" className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.035] px-4 py-4 text-sm text-slate-300">
-        <span aria-hidden="true" className="size-5 animate-spin rounded-full border-2 border-violet-300/25 border-t-violet-300" />
+      <div role="status" aria-live="polite" className="flex items-center gap-3 rounded bg-sidebar px-4 py-4 text-sm text-text">
+        <span aria-hidden="true" className="size-5 animate-spin rounded-full border-2 border-brand/25 border-t-brand" />
         Carregando recuperação de senha...
       </div>
     </AuthShell>

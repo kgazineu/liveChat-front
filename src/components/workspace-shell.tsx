@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { Hash, MessageSquarePlus, UserPlus, Users } from 'lucide-react';
 import {
   useCallback,
   useEffect,
@@ -39,27 +40,55 @@ import type {
 import {
   MediaRoom,
   prepareCallSounds,
-  storedParticipantVolume,
   storeParticipantVolume,
   type MediaRoomSummary,
 } from './media-room';
 import MessagePanel from './message-panel';
 import { RealtimeProvider, useRealtime } from './realtime-provider';
+import { AccountSettings } from './workspace/account-settings';
+import { FriendsView, HomeSidebar, NavigationButton, type FriendsTab } from './workspace/home';
+import { MembersPanel } from './workspace/members-panel';
+import { QuickSwitcher, type SwitcherItem } from './workspace/quick-switcher';
+import { ServerRail } from './workspace/server-rail';
+import { ServerSidebar } from './workspace/server-sidebar';
+import { UserPanel } from './workspace/user-panel';
+import { Avatar, colorFor, initials } from './ui/avatar';
+import { Field, Modal, ModalActions } from './ui/modal';
+import { inputClass } from './ui/styles';
 
-type HomeView = 'friends' | 'directs' | 'requests' | 'invites';
 type DirectCallTarget = { kind: 'DIRECT_CALL'; channelId: string; title: string };
 type SelectedTarget = TextTarget | Extract<MediaTarget, { kind: 'SERVER_VOICE' }> | DirectCallTarget;
 type ModalName = 'server' | 'channel' | 'invite' | null;
+type VoicePreferences = { microphoneMuted: boolean; deafened: boolean };
 
-const inputClass =
-  'w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-violet-400/70 focus:ring-2 focus:ring-violet-500/15';
-const primaryButtonClass =
-  'rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-50';
-const secondaryButtonClass =
-  'rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50';
+const VOICE_PREFERENCES_KEY = 'ui:voice-preferences';
+const MEMBERS_OPEN_KEY = 'ui:members-open';
+const LAST_CHANNEL_KEY = 'ui:last-channel:';
 
-function initial(value: string) {
-  return value.trim().charAt(0).toUpperCase() || '?';
+function readStorage(key: string) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Preferências de interface são opcionais quando o armazenamento local está indisponível.
+  }
+}
+
+function readVoicePreferences(): VoicePreferences {
+  if (typeof window === 'undefined') return { microphoneMuted: false, deafened: false };
+  try {
+    const parsed = JSON.parse(readStorage(VOICE_PREFERENCES_KEY) ?? '{}') as Partial<VoicePreferences>;
+    return { microphoneMuted: parsed.microphoneMuted === true, deafened: parsed.deafened === true };
+  } catch {
+    return { microphoneMuted: false, deafened: false };
+  }
 }
 
 function sortedByName<T extends { name: string }>(items: T[]) {
@@ -133,6 +162,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
   const membersRequestRef = useRef(0);
   const voicePresenceRequestRef = useRef(0);
   const voicePresenceTombstonesRef = useRef(new Map<string, Set<string>>());
+  const autoSelectServerRef = useRef<{ serverId: string; serverName: string } | null>(null);
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [channels, setChannels] = useState<ServerChannel[]>([]);
   const [members, setMembers] = useState<ServerMember[]>([]);
@@ -144,7 +174,11 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
   const [speakingUserIds, setSpeakingUserIds] = useState<string[]>([]);
   const [participantVolumes, setParticipantVolumes] = useState<Record<string, number>>({});
   const [showWebRtcMetrics, setShowWebRtcMetrics] = useState(false);
-  const [mediaDevicePanelTarget, setMediaDevicePanelTarget] = useState<HTMLDivElement | null>(null);
+  const [voicePanelTarget, setVoicePanelTarget] = useState<HTMLDivElement | null>(null);
+  const [voicePreferences, setVoicePreferences] = useState<VoicePreferences>(readVoicePreferences);
+  const [membersOpen, setMembersOpen] = useState(() => typeof window === 'undefined' || readStorage(MEMBERS_OPEN_KEY) !== 'false');
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
+  const [mobileMembersOpen, setMobileMembersOpen] = useState(false);
 
   const [serversLoading, setServersLoading] = useState(true);
   const [communityLoading, setCommunityLoading] = useState(true);
@@ -157,21 +191,17 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
   const [activeServerId, setActiveServerId] = useState<string | null>(null);
   const [selectedTarget, setSelectedTarget] = useState<SelectedTarget | null>(null);
   const [activeMediaTarget, setActiveMediaTarget] = useState<MediaTarget | null>(null);
-  const [homeView, setHomeView] = useState<HomeView>('friends');
+  const [friendsTab, setFriendsTab] = useState<FriendsTab>('all');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [modal, setModal] = useState<ModalName>(null);
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const [serverName, setServerName] = useState('');
   const [channelName, setChannelName] = useState('');
   const [channelType, setChannelType] = useState<ChannelType>('TEXT');
-  const [friendToInvite, setFriendToInvite] = useState('');
-  const [searchEmail, setSearchEmail] = useState('');
-  const [searching, setSearching] = useState(false);
-  const [foundUser, setFoundUser] = useState<User | null>(null);
-  const [searchComplete, setSearchComplete] = useState(false);
+  const [invitedFriendIds, setInvitedFriendIds] = useState<Set<string>>(new Set());
+  const [inviteQuery, setInviteQuery] = useState('');
   const [accountName, setAccountName] = useState(currentUser.name);
   const [accountEmail, setAccountEmail] = useState(currentUser.email);
   const [profileUpdatePending, setProfileUpdatePending] = useState(false);
@@ -269,6 +299,20 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
       if (requestId !== channelsRequestRef.current) return null;
       setChannels(page);
       void loadVoicePresence(serverId, page);
+      const pendingSelection = autoSelectServerRef.current;
+      if (pendingSelection?.serverId === serverId) {
+        autoSelectServerRef.current = null;
+        const channel = preferredTextChannel(page, serverId);
+        if (channel) {
+          setSelectedTarget(current => current ?? {
+            kind: 'SERVER_TEXT',
+            serverId,
+            channelId: channel.id,
+            title: channel.name,
+            subtitle: pendingSelection.serverName,
+          });
+        }
+      }
       return page;
     } catch (error) {
       if (requestId === channelsRequestRef.current) {
@@ -392,10 +436,26 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     [channels],
   );
 
-  function showHome(view: HomeView = 'friends') {
+  useEffect(() => {
+    writeStorage(VOICE_PREFERENCES_KEY, JSON.stringify(voicePreferences));
+  }, [voicePreferences]);
+
+  useEffect(() => {
+    const openSwitcher = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setQuickSwitcherOpen(open => !open);
+      }
+    };
+    window.addEventListener('keydown', openSwitcher);
+    return () => window.removeEventListener('keydown', openSwitcher);
+  }, []);
+
+  function showHome(tab?: FriendsTab) {
     channelsRequestRef.current += 1;
     membersRequestRef.current += 1;
     voicePresenceRequestRef.current += 1;
+    autoSelectServerRef.current = null;
     setChannelsLoading(false);
     setMembersLoading(false);
     setMembers([]);
@@ -403,12 +463,13 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     setSpeakingUserIds([]);
     setActiveServerId(null);
     setSelectedTarget(null);
-    setHomeView(view);
+    if (tab) setFriendsTab(tab);
     setMobileSidebarOpen(false);
   }
 
   function showServer(server: ServerSummary) {
     voicePresenceRequestRef.current += 1;
+    autoSelectServerRef.current = { serverId: server.id, serverName: server.name };
     setVoiceSessionsByChannel({});
     setSpeakingUserIds([]);
     setActiveServerId(server.id);
@@ -419,6 +480,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
 
   function selectServerChannel(channel: ServerChannel) {
     if (!activeServer) return;
+    autoSelectServerRef.current = null;
     if (channel.type === 'VOICE') {
       if (activeMediaTarget?.kind === 'SERVER_VOICE' &&
         activeMediaTarget.serverId === activeServer.id &&
@@ -437,6 +499,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
         setSelectedTarget(mediaTarget);
       }
     } else {
+      writeStorage(`${LAST_CHANNEL_KEY}${activeServer.id}`, channel.id);
       setSelectedTarget({
         kind: 'SERVER_TEXT',
         serverId: activeServer.id,
@@ -449,14 +512,21 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
   }
 
   function selectDirect(channel: DirectChannel) {
-    setActiveServerId(null);
+    if (activeServerId !== null) showHome();
     setSelectedTarget({
       kind: 'DIRECT',
       channelId: channel.id,
       title: channel.participantName,
       subtitle: 'Mensagem direta',
+      participantId: channel.participantId,
     });
     setMobileSidebarOpen(false);
+  }
+
+  function openCreateChannel(type: ChannelType) {
+    setChannelType(type);
+    setChannelName('');
+    setModal('channel');
   }
 
   async function createServer(event: FormEvent<HTMLFormElement>) {
@@ -491,7 +561,6 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
       await loadChannels(activeServer.id);
       toast.success('Canal criado com sucesso.');
       setChannelName('');
-      setChannelType('TEXT');
       setModal(null);
     } catch (error) {
       toast.error(errorMessage(error, 'Não foi possível criar o canal.'));
@@ -500,16 +569,14 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     }
   }
 
-  async function inviteFriend(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!activeServer || !friendToInvite || busyAction) return;
-    setBusyAction('invite-friend');
+  async function inviteFriend(friend: User) {
+    if (!activeServer || busyAction) return;
+    setBusyAction(`invite-${friend.id}`);
     try {
-      await api.post(`/servers/${activeServer.id}/invites`, { friendId: friendToInvite });
-      await loadCommunity();
-      toast.success('Convite enviado.');
-      setFriendToInvite('');
-      setModal(null);
+      await api.post(`/servers/${activeServer.id}/invites`, { friendId: friend.id });
+      setInvitedFriendIds(previous => new Set(previous).add(friend.id));
+      toast.success(`Convite enviado para ${friend.name}.`);
+      void loadCommunity();
     } catch (error) {
       toast.error(errorMessage(error, 'Não foi possível enviar o convite.'));
     } finally {
@@ -559,41 +626,18 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     }
   }
 
-  async function searchUser(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const email = searchEmail.trim();
-    if (!email || searching) return;
-    setSearching(true);
-    setFoundUser(null);
-    setSearchComplete(false);
+  async function addFriendByEmail(email: string) {
     try {
       const response = await api.get<unknown>('/users/search', { params: { email } });
       const user = userFromSearch(response.data);
-      setFoundUser(user);
-      setSearchComplete(true);
-      if (!user) toast.error('Usuário não encontrado.');
-    } catch (error) {
-      setSearchComplete(true);
-      toast.error(errorMessage(error, 'Não foi possível buscar o usuário.'));
-    } finally {
-      setSearching(false);
-    }
-  }
-
-  async function sendFriendRequest() {
-    if (!foundUser || busyAction) return;
-    setBusyAction('send-friend-request');
-    try {
-      await api.post('/friendships/send', { targetUserId: foundUser.id });
+      if (!user) return { ok: false, message: 'Hmm, não encontramos ninguém com esse e-mail. Confira se ele está correto.' };
+      if (user.id === currentUser.id) return { ok: false, message: 'Esse é você! Tente o e-mail de um amigo.' };
+      if (friends.some(friend => friend.id === user.id)) return { ok: false, message: `Você já é amigo de ${user.name}.` };
+      await api.post('/friendships/send', { targetUserId: user.id });
       await loadCommunity();
-      toast.success(`Pedido enviado para ${foundUser.name}.`);
-      setFoundUser(null);
-      setSearchEmail('');
-      setSearchComplete(false);
+      return { ok: true, message: `Tudo certo! Seu pedido de amizade para ${user.name} foi enviado.` };
     } catch (error) {
-      toast.error(errorMessage(error, 'Não foi possível enviar o pedido.'));
-    } finally {
-      setBusyAction(null);
+      return { ok: false, message: errorMessage(error, 'Não foi possível enviar o pedido de amizade.') };
     }
   }
 
@@ -675,7 +719,6 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     }
   }
 
-  const mediaActive = activeMediaTarget !== null;
   const showingActiveMedia = activeMediaTarget !== null && (
     (selectedTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.kind === 'SERVER_VOICE' &&
       selectedTarget.channelId === activeMediaTarget.channelId) ||
@@ -720,7 +763,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
             toast.dismiss(toastInstance.id);
             void installDesktopUpdate();
           }}
-          className="rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-semibold text-white"
+          className="rounded-[3px] bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover"
         >
           Reiniciar
         </button>
@@ -752,6 +795,20 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     setParticipantVolumes(previous => ({ ...previous, [userId]: normalized }));
   }, []);
 
+  const toggleMicrophone = useCallback(() => {
+    setVoicePreferences(previous => previous.deafened
+      ? { microphoneMuted: false, deafened: false }
+      : { ...previous, microphoneMuted: !previous.microphoneMuted });
+  }, []);
+
+  const toggleDeafen = useCallback(() => {
+    setVoicePreferences(previous => ({ ...previous, deafened: !previous.deafened }));
+  }, []);
+
+  const setMicrophoneMuted = useCallback((microphoneMuted: boolean) => {
+    setVoicePreferences(previous => ({ ...previous, microphoneMuted }));
+  }, []);
+
   function leaveActiveMedia() {
     if (!activeMediaTarget) return;
     if (selectedTarget?.kind === 'DIRECT_CALL' && activeMediaTarget.kind === 'DIRECT' &&
@@ -761,6 +818,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
         channelId: activeMediaTarget.channelId,
         title: activeMediaTarget.title,
         subtitle: 'Mensagem direta',
+        participantId: directChannels.find(channel => channel.id === activeMediaTarget.channelId)?.participantId,
       });
     } else if (selectedTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.kind === 'SERVER_VOICE' &&
       selectedTarget.channelId === activeMediaTarget.channelId) {
@@ -778,153 +836,186 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     setActiveMediaTarget(null);
   }
 
+  function toggleMembers() {
+    if (typeof window !== 'undefined' && !(window.matchMedia?.('(min-width: 1024px)').matches ?? true)) {
+      setMobileMembersOpen(open => !open);
+      return;
+    }
+    const next = !membersOpen;
+    setMembersOpen(next);
+    writeStorage(MEMBERS_OPEN_KEY, String(next));
+  }
+
+  function selectSwitcherItem(item: SwitcherItem) {
+    setQuickSwitcherOpen(false);
+    if (item.kind === 'friend') {
+      const friend = friends.find(candidate => candidate.id === item.id);
+      if (friend) void openFriend(friend);
+    } else if (item.kind === 'server') {
+      const server = servers.find(candidate => candidate.id === item.id);
+      if (server) showServer(server);
+      setMobileSidebarOpen(false);
+    } else {
+      const channel = channels.find(candidate => candidate.id === item.id);
+      if (channel) selectServerChannel(channel);
+    }
+  }
+
+  const voiceServerId = activeMediaTarget?.kind === 'SERVER_VOICE' ? activeMediaTarget.serverId : null;
+  const voiceChannelByUserId = useMemo(() => {
+    const result: Record<string, string> = {};
+    for (const channel of voiceChannels) {
+      for (const session of voiceSessionsByChannel[channel.id] ?? []) result[String(session.userId)] = channel.name;
+    }
+    return result;
+  }, [voiceChannels, voiceSessionsByChannel]);
+  const switcherItems = useMemo<SwitcherItem[]>(() => [
+    ...orderedFriends.map(friend => ({ kind: 'friend' as const, id: friend.id, name: friend.name, hint: 'Amigo' })),
+    ...[...textChannels, ...voiceChannels].map(channel => ({
+      kind: 'channel' as const,
+      id: channel.id,
+      name: channel.name,
+      hint: activeServer?.name ?? '',
+      channelType: channel.type,
+    })),
+    ...sortedByName(servers).map(server => ({ kind: 'server' as const, id: server.id, name: server.name, hint: 'Servidor' })),
+  ], [activeServer?.name, orderedFriends, servers, textChannels, voiceChannels]);
+  const invitableFriends = useMemo(() => {
+    const query = inviteQuery.trim().toLocaleLowerCase('pt-BR');
+    const memberIds = new Set(members.map(member => String(member.userId)));
+    return orderedFriends
+      .filter(friend => !memberIds.has(friend.id))
+      .filter(friend => !query || friend.name.toLocaleLowerCase('pt-BR').includes(query));
+  }, [inviteQuery, members, orderedFriends]);
+
+  const navigationButton = <NavigationButton onClick={() => setMobileSidebarOpen(true)} />;
+  const showingTextChannel = selectedTarget?.kind === 'SERVER_TEXT';
+  const membersVisible = activeServer !== null && !showingActiveMedia && (showingTextChannel || selectedTarget === null);
+  const membersToggle = activeServer ? (
+    <button
+      type="button"
+      onClick={toggleMembers}
+      aria-label={membersOpen ? 'Ocultar lista de membros' : 'Mostrar lista de membros'}
+      aria-pressed={membersOpen}
+      className={`has-tooltip relative grid h-8 w-8 place-items-center rounded transition ${membersOpen ? 'text-header' : 'text-interactive hover:text-text'}`}
+    >
+      <Users size={22} />
+      <span className="tooltip tooltip-top text-xs">{membersOpen ? 'Ocultar lista de membros' : 'Mostrar lista de membros'}</span>
+    </button>
+  ) : null;
+
+  const membersPanel = activeServer ? (
+    <MembersPanel
+      key={activeServer.id}
+      server={activeServer}
+      currentUserId={currentUser.id}
+      members={members}
+      loading={membersLoading}
+      friends={friends}
+      voiceChannelByUserId={voiceChannelByUserId}
+      onMessage={friend => {
+        setMobileMembersOpen(false);
+        void openFriend(friend);
+      }}
+      onClose={() => setMobileMembersOpen(false)}
+    />
+  ) : null;
+
   return (
-    <div className="flex h-dvh min-h-0 overflow-hidden bg-slate-950 text-slate-100">
-      <ServerRail
-        servers={servers}
-        activeServerId={activeServerId}
-        loading={serversLoading}
-        error={serversError}
-        onHome={() => showHome('friends')}
-        onServer={showServer}
-        onCreate={() => setModal('server')}
-        onRetry={() => void loadServers()}
-        onSettings={() => setSettingsMenuOpen(open => !open)}
-      />
-
-      {settingsMenuOpen && (
-        <>
-          <button
-            type="button"
-            className="fixed inset-0 z-40 cursor-default bg-transparent"
-            onClick={() => setSettingsMenuOpen(false)}
-            aria-label="Fechar menu de configurações"
-          />
-          <div className="fixed bottom-3 left-18 z-50 w-64 overflow-hidden rounded-2xl border border-white/10 bg-slate-900 p-2 shadow-2xl shadow-black/50">
-            <div className="border-b border-white/7 px-3 py-2">
-              <p className="truncate text-sm font-semibold text-white">{currentUser.name}</p>
-              <p className="truncate text-xs text-slate-500">{currentUser.email}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSettingsMenuOpen(false);
-                setAccountName(currentUser.name);
-                setAccountEmail(currentUser.email);
-                setProfileUpdatePending(false);
-                setAccountSettingsOpen(true);
-              }}
-              className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/7"
-            >
-              <span aria-hidden="true">⚙</span>
-              Configurações da conta
-            </button>
-            {activeMediaTarget && (
-              <button
-                type="button"
-                onClick={() => {
-                  setShowWebRtcMetrics(visible => !visible);
-                  setSettingsMenuOpen(false);
-                }}
-                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/7"
-                aria-pressed={showWebRtcMetrics}
-              >
-                <span aria-hidden="true">⌁</span>
-                {showWebRtcMetrics ? 'Ocultar qualidade WebRTC' : 'Mostrar qualidade WebRTC'}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={logout}
-              className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-rose-300 transition hover:bg-rose-500/10"
-            >
-              <span aria-hidden="true">↪</span>
-              Sair da conta
-            </button>
-          </div>
-        </>
-      )}
-
+    <div className="flex h-dvh min-h-0 overflow-hidden bg-main text-text">
       {mobileSidebarOpen && (
         <button
           type="button"
-          className="fixed inset-0 z-20 bg-black/60 md:hidden"
+          className="fixed inset-0 z-20 animate-fade-in bg-black/60 md:hidden"
           onClick={() => setMobileSidebarOpen(false)}
           aria-label="Fechar navegação"
         />
       )}
 
-      <aside className={`${mobileSidebarOpen ? 'flex' : 'hidden'} ${mediaActive ? 'pb-40' : ''} fixed inset-y-0 left-16 z-30 w-[min(20rem,calc(100vw-4rem))] flex-col border-r border-white/7 bg-slate-900 shadow-2xl md:static md:z-auto md:flex md:w-72 md:shrink-0 md:shadow-none`}>
-        {activeServer ? (
-          <ServerSidebar
-            server={activeServer}
-            channelsLoading={channelsLoading}
-            channelsError={channelsError}
-            textChannels={textChannels}
-            voiceChannels={voiceChannels}
-            voiceSessionsByChannel={voiceSessionsByChannel}
-            speakingUserIds={speakingUserIds}
-            participantVolumes={participantVolumes}
-            currentUserId={currentUser.id}
-            selectedTarget={selectedTarget}
-            activeMediaTarget={activeMediaTarget}
-            onSelectChannel={selectServerChannel}
-            onRetry={() => void loadChannels(activeServer.id)}
-            onCreateChannel={() => setModal('channel')}
-            onInvite={() => setModal('invite')}
-            onParticipantVolumeChange={changeParticipantVolume}
-            onClose={() => setMobileSidebarOpen(false)}
-          />
-        ) : (
-          <HomeSidebar
+      <div className={`${mobileSidebarOpen ? 'flex' : 'hidden'} fixed inset-y-0 left-0 z-30 max-w-[calc(100vw-3rem)] shadow-2xl md:static md:z-auto md:flex md:shadow-none`}>
+        <ServerRail
+          servers={servers}
+          activeServerId={activeServerId}
+          loading={serversLoading}
+          error={serversError}
+          homeBadge={requests.length + pendingInvites.length}
+          voiceServerId={voiceServerId}
+          onHome={() => showHome()}
+          onServer={showServer}
+          onCreate={() => setModal('server')}
+          onRetry={() => void loadServers()}
+        />
+        <aside className="flex w-60 min-w-0 flex-col bg-sidebar" aria-label={activeServer ? `Canais de ${activeServer.name}` : 'Conversas'}>
+          {activeServer ? (
+            <ServerSidebar
+              server={activeServer}
+              channelsLoading={channelsLoading}
+              channelsError={channelsError}
+              textChannels={textChannels}
+              voiceChannels={voiceChannels}
+              voiceSessionsByChannel={voiceSessionsByChannel}
+              speakingUserIds={speakingUserIds}
+              participantVolumes={participantVolumes}
+              currentUserId={currentUser.id}
+              selectedTarget={selectedTarget}
+              activeMediaTarget={activeMediaTarget}
+              onSelectChannel={selectServerChannel}
+              onRetry={() => void loadChannels(activeServer.id)}
+              onCreateChannel={openCreateChannel}
+              onInvite={() => {
+                setInviteQuery('');
+                setInvitedFriendIds(new Set());
+                setModal('invite');
+              }}
+              onParticipantVolumeChange={changeParticipantVolume}
+              onClose={() => setMobileSidebarOpen(false)}
+            />
+          ) : (
+            <HomeSidebar
+              directs={orderedDirects}
+              pendingCount={requests.length}
+              selectedTarget={selectedTarget}
+              friendsActive={selectedTarget === null}
+              loading={communityLoading}
+              error={communityError}
+              onFriends={() => showHome()}
+              onDirect={selectDirect}
+              onNewDirect={() => showHome('all')}
+              onSearch={() => setQuickSwitcherOpen(true)}
+              onRetry={() => void loadCommunity()}
+              onClose={() => setMobileSidebarOpen(false)}
+            />
+          )}
+          <div ref={setVoicePanelTarget} className="shrink-0" />
+          <UserPanel
             currentUser={currentUser}
-            view={homeView}
-            friends={orderedFriends}
-            directs={orderedDirects}
-            requests={requests}
-            invites={pendingInvites}
-            selectedTarget={selectedTarget}
-            loading={communityLoading}
-            error={communityError}
-            busyAction={busyAction}
-            searchEmail={searchEmail}
-            foundUser={foundUser}
-            searchComplete={searchComplete}
-            searching={searching}
-            onView={setHomeView}
-            onSearchEmail={value => {
-              setSearchEmail(value);
-              setFoundUser(null);
-              setSearchComplete(false);
+            inCall={activeMediaTarget !== null}
+            microphoneMuted={voicePreferences.microphoneMuted}
+            deafened={voicePreferences.deafened}
+            showMetricsToggle={activeMediaTarget !== null}
+            metricsVisible={showWebRtcMetrics}
+            onToggleMicrophone={toggleMicrophone}
+            onToggleDeafen={toggleDeafen}
+            onOpenAccount={() => {
+              setAccountName(currentUser.name);
+              setAccountEmail(currentUser.email);
+              setProfileUpdatePending(false);
+              setAccountSettingsOpen(true);
             }}
-            onSearch={searchUser}
-            onSendRequest={() => void sendFriendRequest()}
-            onFriend={friend => void openFriend(friend)}
-            onDirect={selectDirect}
-            onAnswerRequest={(request, decision) => void answerFriendRequest(request, decision)}
-            onAcceptInvite={invite => void acceptServerInvite(invite)}
-            onRetry={() => void loadCommunity()}
-            onClose={() => setMobileSidebarOpen(false)}
+            onToggleMetrics={() => setShowWebRtcMetrics(visible => !visible)}
+            onLogout={logout}
           />
-        )}
-      </aside>
+        </aside>
+      </div>
 
-      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-slate-950">
-        <button
-          type="button"
-          onClick={() => setMobileSidebarOpen(true)}
-          className="absolute left-3 top-3 z-10 grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-slate-900/95 text-lg text-slate-200 shadow-lg backdrop-blur md:hidden"
-          aria-label="Abrir navegação"
-          aria-expanded={mobileSidebarOpen}
-        >
-          ☰
-        </button>
-
+      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-main">
         {!showingActiveMedia && (selectedTarget && selectedTarget.kind !== 'SERVER_VOICE' && selectedTarget.kind !== 'DIRECT_CALL' ? (
           <MessagePanel
             key={`${selectedTarget.kind}-${selectedTarget.channelId}`}
             currentUser={currentUser}
             target={selectedTarget}
+            headerStart={navigationButton}
+            headerActions={selectedTarget.kind === 'SERVER_TEXT' ? membersToggle : null}
             onStartCall={selectedTarget.kind === 'DIRECT' ? () => {
               if (activeMediaTarget?.kind !== 'DIRECT' ||
                 activeMediaTarget.channelId !== selectedTarget.channelId) {
@@ -933,6 +1024,7 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
                   kind: 'DIRECT',
                   channelId: selectedTarget.channelId,
                   title: selectedTarget.title,
+                  participantId: selectedTarget.participantId,
                 });
               }
               setSelectedTarget({
@@ -943,17 +1035,32 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
             } : undefined}
           />
         ) : activeServer ? (
-          <ServerWelcome server={activeServer} onOpenNavigation={() => setMobileSidebarOpen(true)} />
-        ) : (
-          <HomeWelcome
-            currentUser={currentUser}
-            friendsCount={friends.length}
-            requestsCount={requests.length}
-            invitesCount={pendingInvites.length}
-            onNavigate={view => {
-              setHomeView(view);
-              setMobileSidebarOpen(true);
+          <ServerWelcome
+            server={activeServer}
+            navigationButton={navigationButton}
+            membersToggle={membersToggle}
+            hasChannels={channels.length > 0}
+            onInvite={() => {
+              setInviteQuery('');
+              setInvitedFriendIds(new Set());
+              setModal('invite');
             }}
+            onCreateChannel={() => openCreateChannel('TEXT')}
+            onOpenNavigation={() => setMobileSidebarOpen(true)}
+          />
+        ) : (
+          <FriendsView
+            tab={friendsTab}
+            friends={orderedFriends}
+            requests={requests}
+            invites={pendingInvites}
+            busyAction={busyAction}
+            navigationButton={navigationButton}
+            onTab={setFriendsTab}
+            onFriend={friend => void openFriend(friend)}
+            onAnswerRequest={(request, decision) => void answerFriendRequest(request, decision)}
+            onAcceptInvite={invite => void acceptServerInvite(invite)}
+            onAddFriend={addFriendByEmail}
           />
         ))}
 
@@ -968,882 +1075,259 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
             onSummaryAction={handleMediaSummary}
             showMetrics={showWebRtcMetrics}
             participantVolumes={participantVolumes}
-            devicePanelTarget={mediaDevicePanelTarget}
+            voicePanelTarget={voicePanelTarget}
+            microphoneMuted={voicePreferences.microphoneMuted}
+            deafened={voicePreferences.deafened}
+            onToggleMicrophoneAction={toggleMicrophone}
+            onToggleDeafenAction={toggleDeafen}
+            onMicrophoneMutedChangeAction={setMicrophoneMuted}
+            headerStart={navigationButton}
           />
         )}
       </main>
 
-      {activeServer && (
-        <ServerMembersPanel
-          key={activeServer.id}
-          server={activeServer}
-          currentUserId={currentUser.id}
-          members={members}
-          loading={membersLoading}
-          friends={friends}
-          onMediaDevicesMountAction={setMediaDevicePanelTarget}
-        />
+      {membersVisible && membersOpen && <div className="hidden lg:flex">{membersPanel}</div>}
+      {membersVisible && mobileMembersOpen && (
+        <div className="fixed inset-0 z-40 flex justify-end lg:hidden">
+          <button type="button" className="absolute inset-0 animate-fade-in bg-black/60" onClick={() => setMobileMembersOpen(false)} aria-label="Fechar lista de membros" />
+          <div className="relative h-full animate-slide-up">{membersPanel}</div>
+        </div>
+      )}
+
+      {quickSwitcherOpen && (
+        <QuickSwitcher items={switcherItems} onSelect={selectSwitcherItem} onClose={() => setQuickSwitcherOpen(false)} />
       )}
 
       {modal === 'server' && (
-        <Modal title="Criar servidor" description="Crie um novo espaço para sua comunidade." onClose={() => setModal(null)}>
+        <Modal
+          title="Crie seu servidor"
+          description="Seu servidor é onde você e seus amigos se reúnem. Crie o seu e comece a conversar."
+          onClose={() => setModal(null)}
+        >
           <form onSubmit={createServer} className="space-y-4">
-            <Field label="Nome do servidor" htmlFor="server-name">
+            <div className="mx-auto grid h-20 w-20 place-items-center rounded-full border-2 border-dashed border-interactive text-2xl font-semibold text-header" style={serverName.trim() ? { backgroundColor: colorFor(serverName.trim()), borderStyle: 'solid', borderColor: 'transparent' } : undefined} aria-hidden="true">
+              {serverName.trim() ? initials(serverName, 2) : '+'}
+            </div>
+            <Field label="Nome do servidor" htmlFor="server-name" hint="Você pode convidar amigos assim que ele for criado.">
               <input
                 id="server-name"
                 className={inputClass}
                 value={serverName}
                 onChange={event => setServerName(event.target.value)}
-                placeholder="Ex.: Comunidade Dev"
+                placeholder={`Servidor de ${currentUser.name}`}
                 maxLength={80}
                 autoFocus
                 required
               />
             </Field>
-            <ModalActions busy={busyAction === 'create-server'} onCancel={() => setModal(null)} submitLabel="Criar servidor" />
+            <ModalActions busy={busyAction === 'create-server'} disabled={!serverName.trim()} onCancel={() => setModal(null)} submitLabel="Criar" />
           </form>
         </Modal>
       )}
 
       {modal === 'channel' && activeServer?.role === 'OWNER' && (
-        <Modal title="Criar canal" description={`Adicione um canal a ${activeServer.name}.`} onClose={() => setModal(null)}>
-          <form onSubmit={createChannel} className="space-y-4">
+        <Modal title="Criar canal" description={`em ${activeServer.name}`} onClose={() => setModal(null)}>
+          <form onSubmit={createChannel} className="space-y-5">
+            <fieldset>
+              <legend className="mb-2 text-xs font-bold uppercase text-muted">Tipo de canal</legend>
+              <div className="space-y-2">
+                {([
+                  ['TEXT', 'Texto', 'Envie mensagens, imagens, GIFs e arquivos.'],
+                  ['VOICE', 'Voz', 'Converse por voz, vídeo e compartilhe a tela.'],
+                ] as const).map(([value, label, description]) => (
+                  <label
+                    key={value}
+                    className={`flex cursor-pointer items-center gap-3 rounded px-3 py-2.5 transition ${channelType === value ? 'bg-selected' : 'bg-sidebar hover:bg-hover'}`}
+                  >
+                    <span className="text-interactive" aria-hidden="true">{value === 'TEXT' ? <Hash size={24} /> : <VolumeIcon />}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-medium text-header">{label}</span>
+                      <span className="block text-sm text-muted">{description}</span>
+                    </span>
+                    <input
+                      type="radio"
+                      name="channel-type"
+                      value={value}
+                      checked={channelType === value}
+                      onChange={() => setChannelType(value)}
+                      className="h-5 w-5 accent-brand"
+                    />
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <Field label="Nome do canal" htmlFor="channel-name">
-              <input
-                id="channel-name"
-                className={inputClass}
-                value={channelName}
-                onChange={event => setChannelName(event.target.value)}
-                placeholder="Ex.: geral"
-                maxLength={80}
-                autoFocus
-                required
-              />
+              <div className="relative">
+                <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-interactive" aria-hidden="true">
+                  {channelType === 'TEXT' ? <Hash size={16} /> : <VolumeIcon small />}
+                </span>
+                <input
+                  id="channel-name"
+                  className={`${inputClass} pl-8`}
+                  value={channelName}
+                  onChange={event => setChannelName(channelType === 'TEXT' ? event.target.value.toLowerCase().replace(/\s+/g, '-') : event.target.value)}
+                  placeholder={channelType === 'TEXT' ? 'novo-canal' : 'Sala de voz'}
+                  maxLength={80}
+                  autoFocus
+                  required
+                />
+              </div>
             </Field>
-            <Field label="Tipo" htmlFor="channel-type">
-              <select
-                id="channel-type"
-                className={inputClass}
-                value={channelType}
-                onChange={event => setChannelType(event.target.value as ChannelType)}
-              >
-                <option value="TEXT">Texto</option>
-                <option value="VOICE">Voz e vídeo</option>
-              </select>
-            </Field>
-            <ModalActions busy={busyAction === 'create-channel'} onCancel={() => setModal(null)} submitLabel="Criar canal" />
+            <ModalActions busy={busyAction === 'create-channel'} disabled={!channelName.trim()} onCancel={() => setModal(null)} submitLabel="Criar canal" />
           </form>
         </Modal>
       )}
 
       {modal === 'invite' && activeServer && (
-        <Modal title="Convidar amigo" description={`Convide um amigo aceito para ${activeServer.name}.`} onClose={() => setModal(null)}>
-          <form onSubmit={inviteFriend} className="space-y-4">
-            <Field label="Amigo" htmlFor="invite-friend">
-              <select
-                id="invite-friend"
-                className={inputClass}
-                value={friendToInvite}
-                onChange={event => setFriendToInvite(event.target.value)}
-                autoFocus
-                required
-              >
-                <option value="">Selecione um amigo</option>
-                {orderedFriends.map(friend => (
-                  <option key={friend.id} value={friend.id}>{friend.name}</option>
-                ))}
-              </select>
-            </Field>
-            {orderedFriends.length === 0 && (
-              <p className="rounded-xl border border-amber-400/15 bg-amber-400/8 p-3 text-sm text-amber-200">
-                Você precisa ter um amigo aceito antes de enviar um convite.
-              </p>
-            )}
-            <ModalActions
-              busy={busyAction === 'invite-friend'}
-              disabled={!friendToInvite}
-              onCancel={() => setModal(null)}
-              submitLabel="Enviar convite"
+        <Modal title={`Convide amigos para ${activeServer.name}`} onClose={() => setModal(null)}>
+          {orderedFriends.length > 0 && (
+            <input
+              className={inputClass}
+              value={inviteQuery}
+              onChange={event => setInviteQuery(event.target.value)}
+              placeholder="Buscar amigos"
+              aria-label="Buscar amigos"
+              autoFocus
             />
-          </form>
+          )}
+          <ul className="-mx-2 mt-3 max-h-72 overflow-y-auto" aria-label="Amigos para convidar">
+            {invitableFriends.map(friend => {
+              const invited = invitedFriendIds.has(friend.id);
+              return (
+                <li key={friend.id} className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-hover">
+                  <Avatar name={friend.name} seed={friend.id} size="sm" />
+                  <span className="min-w-0 flex-1 truncate font-medium text-header">{friend.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => void inviteFriend(friend)}
+                    disabled={invited || busyAction !== null}
+                    className={`min-w-20 rounded-[3px] border px-4 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed ${invited ? 'border-transparent text-muted' : 'border-success text-white hover:bg-success'}`}
+                  >
+                    {invited ? 'Enviado' : busyAction === `invite-${friend.id}` ? '…' : 'Convidar'}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {orderedFriends.length === 0 && (
+            <div className="py-6 text-center">
+              <p className="font-medium text-header">Você ainda não tem amigos para convidar</p>
+              <p className="mt-1 text-sm text-muted">Adicione amigos pelo e-mail e depois convide-os para cá.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setModal(null);
+                  showHome('add');
+                }}
+                className="mt-4 inline-flex items-center gap-2 rounded-[3px] bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-hover"
+              >
+                <UserPlus size={16} /> Adicionar amigo
+              </button>
+            </div>
+          )}
+          {orderedFriends.length > 0 && invitableFriends.length === 0 && (
+            <p className="py-6 text-center text-sm text-muted">
+              {inviteQuery.trim() ? `Nenhum amigo com “${inviteQuery.trim()}” para convidar.` : 'Todos os seus amigos já estão neste servidor.'}
+            </p>
+          )}
         </Modal>
       )}
 
       {accountSettingsOpen && (
-        <Modal
-          title="Configurações da conta"
-          description="Gerencie seus dados de acesso e sua conta."
+        <AccountSettings
+          currentUser={currentUser}
+          accountName={accountName}
+          accountEmail={accountEmail}
+          profileUpdatePending={profileUpdatePending}
+          busyAction={busyAction}
+          onAccountNameChange={value => {
+            setAccountName(value);
+            setProfileUpdatePending(false);
+          }}
+          onAccountEmailChange={value => {
+            setAccountEmail(value);
+            setProfileUpdatePending(false);
+          }}
+          onSubmitProfile={requestProfileUpdate}
+          onRequestPasswordChange={() => void requestPasswordChange()}
+          onDeleteAccount={() => void deleteAccount()}
+          onLogout={logout}
           onClose={() => setAccountSettingsOpen(false)}
-        >
-          <div className="space-y-5">
-            <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/4 p-4">
-              <Avatar name={currentUser.name} />
-              <div className="min-w-0">
-                <p className="truncate font-semibold text-white">{currentUser.name}</p>
-                <p className="truncate text-sm text-slate-400">{currentUser.email}</p>
-              </div>
-            </div>
-
-            <form onSubmit={requestProfileUpdate} className="grid gap-3">
-              <Field label="Nome de usuário" htmlFor="account-name">
-                <input
-                  id="account-name"
-                  className={inputClass}
-                  value={accountName}
-                  onChange={event => {
-                    setAccountName(event.target.value);
-                    setProfileUpdatePending(false);
-                  }}
-                  maxLength={100}
-                  required
-                />
-              </Field>
-              <Field label="E-mail" htmlFor="account-email">
-                <input
-                  id="account-email"
-                  type="email"
-                  className={inputClass}
-                  value={accountEmail}
-                  onChange={event => {
-                    setAccountEmail(event.target.value);
-                    setProfileUpdatePending(false);
-                  }}
-                  maxLength={254}
-                  required
-                />
-              </Field>
-              <p className="rounded-xl border border-cyan-400/15 bg-cyan-400/6 p-3 text-xs leading-relaxed text-cyan-100/75">
-                A alteração só será aplicada após você confirmar o link enviado para <strong>{currentUser.email}</strong>.
-              </p>
-              {profileUpdatePending && (
-                <p role="status" className="rounded-xl border border-emerald-400/15 bg-emerald-400/8 p-3 text-xs text-emerald-200">
-                  Solicitação criada. Verifique o seu e-mail atual; o link expira em aproximadamente 15 minutos.
-                </p>
-              )}
-              <button
-                type="submit"
-                disabled={busyAction !== null}
-                className={primaryButtonClass}
-              >
-                {busyAction === 'profile-update' ? 'Enviando confirmação…' : 'Salvar alterações'}
-              </button>
-            </form>
-
-            <div className="rounded-2xl border border-white/8 bg-white/3 p-4">
-              <h3 className="text-sm font-semibold text-white">Senha</h3>
-              <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                Enviaremos um link de uso único para seu e-mail. Ao concluir a troca, todas as sessões anteriores serão invalidadas.
-              </p>
-              <button
-                type="button"
-                onClick={() => void requestPasswordChange()}
-                disabled={busyAction !== null}
-                className={`${secondaryButtonClass} mt-3 w-full`}
-              >
-                {busyAction === 'password-reset' ? 'Enviando link…' : 'Alterar minha senha'}
-              </button>
-            </div>
-
-            <div className="rounded-2xl border border-rose-400/15 bg-rose-500/5 p-4">
-              <h3 className="text-sm font-semibold text-rose-200">Zona de perigo</h3>
-              <p className="mt-1 text-xs text-rose-200/60">A exclusão da conta é permanente.</p>
-              <button
-                type="button"
-                onClick={() => void deleteAccount()}
-                disabled={busyAction !== null}
-                className="mt-3 w-full rounded-xl border border-rose-400/20 bg-rose-500/10 px-4 py-2.5 text-sm font-semibold text-rose-200 transition hover:bg-rose-500/20 disabled:opacity-50"
-              >
-                {busyAction === 'delete-account' ? 'Excluindo…' : 'Excluir minha conta'}
-              </button>
-            </div>
-          </div>
-        </Modal>
+        />
       )}
     </div>
   );
 }
 
-function ServerRail({
-  servers,
-  activeServerId,
-  loading,
-  error,
-  onHome,
-  onServer,
-  onCreate,
-  onRetry,
-  onSettings,
-}: {
-  servers: ServerSummary[];
-  activeServerId: string | null;
-  loading: boolean;
-  error: string | null;
-  onHome: () => void;
-  onServer: (server: ServerSummary) => void;
-  onCreate: () => void;
-  onRetry: () => void;
-  onSettings: () => void;
-}) {
+function preferredTextChannel(page: ServerChannel[], serverId: string) {
+  const textChannels = page
+    .filter(channel => channel.type === 'TEXT')
+    .sort((first, second) => first.position - second.position || first.name.localeCompare(second.name, 'pt-BR'));
+  const rememberedId = typeof window === 'undefined' ? null : readStorage(`${LAST_CHANNEL_KEY}${serverId}`);
+  return textChannels.find(channel => channel.id === rememberedId) ?? textChannels[0] ?? null;
+}
+
+function VolumeIcon({ small = false }: { small?: boolean }) {
   return (
-    <nav className="flex w-16 shrink-0 flex-col items-center border-r border-white/7 bg-slate-950 py-3" aria-label="Servidores">
-      <button
-        type="button"
-        onClick={onHome}
-        className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl text-xl transition ${activeServerId === null ? 'bg-violet-500 text-white' : 'bg-slate-800 text-violet-300 hover:rounded-xl hover:bg-violet-500 hover:text-white'}`}
-        aria-label="Início"
-        title="Início"
-      >
-        ◈
-      </button>
-      <div className="my-3 h-px w-8 shrink-0 bg-white/10" />
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2">
-        {loading && <span className="block py-2 text-center text-xs text-slate-500" aria-label="Carregando servidores">…</span>}
-        {!loading && error && (
-          <button type="button" onClick={onRetry} className="grid h-11 w-11 place-items-center rounded-2xl bg-red-500/10 text-red-300" aria-label="Tentar carregar servidores novamente" title={error}>!</button>
-        )}
-        {!loading && !error && servers.length === 0 && (
-          <span className="grid h-8 w-11 place-items-center text-xs text-slate-600" aria-label="Nenhum servidor" title="Nenhum servidor">—</span>
-        )}
-        {!loading && !error && servers.map(server => (
-          <button
-            key={server.id}
-            type="button"
-            onClick={() => onServer(server)}
-            className={`grid h-11 w-11 place-items-center rounded-2xl text-sm font-bold transition ${activeServerId === server.id ? 'rounded-xl bg-violet-500 text-white' : 'bg-slate-800 text-slate-300 hover:rounded-xl hover:bg-violet-500 hover:text-white'}`}
-            aria-label={server.name}
-            title={server.name}
-          >
-            {initial(server.name)}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={onCreate}
-          className="grid h-11 w-11 place-items-center rounded-2xl bg-emerald-500/10 text-xl text-emerald-300 transition hover:rounded-xl hover:bg-emerald-500 hover:text-white"
-          aria-label="Criar servidor"
-          title="Criar servidor"
-        >
-          +
-        </button>
-      </div>
-      <button
-        type="button"
-        onClick={onSettings}
-        className="mt-3 grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/5 text-base text-slate-400 transition hover:bg-violet-500/15 hover:text-violet-200"
-        aria-label="Abrir configurações"
-        title="Configurações"
-      >
-        ⚙
-      </button>
-    </nav>
+    <svg width={small ? 16 : 24} height={small ? 16 : 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6A1.4 1.4 0 0 1 5.4 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5Z" />
+      <path d="M16 9a5 5 0 0 1 0 6" />
+      <path d="M19.4 18.4a9 9 0 0 0 0-12.8" />
+    </svg>
   );
 }
 
-function ServerSidebar({
+function ServerWelcome({
   server,
-  channelsLoading,
-  channelsError,
-  textChannels,
-  voiceChannels,
-  voiceSessionsByChannel,
-  speakingUserIds,
-  participantVolumes,
-  currentUserId,
-  selectedTarget,
-  activeMediaTarget,
-  onSelectChannel,
-  onRetry,
-  onCreateChannel,
+  navigationButton,
+  membersToggle,
+  hasChannels,
   onInvite,
-  onParticipantVolumeChange,
-  onClose,
+  onCreateChannel,
+  onOpenNavigation,
 }: {
   server: ServerSummary;
-  channelsLoading: boolean;
-  channelsError: string | null;
-  textChannels: ServerChannel[];
-  voiceChannels: ServerChannel[];
-  voiceSessionsByChannel: Record<string, MediaSession[]>;
-  speakingUserIds: string[];
-  participantVolumes: Record<string, number>;
-  currentUserId: string;
-  selectedTarget: SelectedTarget | null;
-  activeMediaTarget: MediaTarget | null;
-  onSelectChannel: (channel: ServerChannel) => void;
-  onRetry: () => void;
-  onCreateChannel: () => void;
+  navigationButton: ReactNode;
+  membersToggle: ReactNode;
+  hasChannels: boolean;
   onInvite: () => void;
-  onParticipantVolumeChange: (userId: string, volume: number) => void;
-  onClose: () => void;
+  onCreateChannel: () => void;
+  onOpenNavigation: () => void;
 }) {
-  const [selectedVoiceParticipant, setSelectedVoiceParticipant] = useState<string | null>(null);
-
+  const owner = server.role === 'OWNER';
   return (
-    <>
-      <header className="border-b border-white/7 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="truncate font-bold text-white">{server.name}</h1>
-            <p className="mt-0.5 text-xs text-slate-500">{server.role === 'OWNER' ? 'Você é o dono' : 'Membro'}</p>
-          </div>
-          <button type="button" onClick={onClose} className="text-xl text-slate-400 md:hidden" aria-label="Fechar navegação">×</button>
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <button type="button" onClick={onInvite} className={secondaryButtonClass}>Convidar</button>
-          {server.role === 'OWNER' && (
-            <button type="button" onClick={onCreateChannel} className={primaryButtonClass}>Novo canal</button>
-          )}
-        </div>
+    <section className="flex min-h-0 flex-1 flex-col">
+      <header className="flex h-12 shrink-0 items-center gap-2 px-2 shadow-[0_1px_0_rgba(4,4,5,0.2),0_1.5px_0_rgba(6,6,7,0.05)] sm:px-4">
+        {navigationButton}
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-header">{server.name}</h1>
+        {membersToggle}
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {channelsLoading && <SidebarState title="Carregando canais" description="Organizando a comunidade…" />}
-        {!channelsLoading && channelsError && <SidebarError message={channelsError} onRetry={onRetry} />}
-        {!channelsLoading && !channelsError && textChannels.length === 0 && voiceChannels.length === 0 && (
-          <SidebarState title="Nenhum canal" description={server.role === 'OWNER' ? 'Crie o primeiro canal deste servidor.' : 'O dono ainda não criou canais.'} />
-        )}
-        {!channelsLoading && !channelsError && textChannels.length > 0 && (
-          <ChannelGroup title="Canais de texto">
-            {textChannels.map(channel => (
-              <ChannelButton
-                key={channel.id}
-                label={channel.name}
-                icon="#"
-                active={selectedTarget?.kind === 'SERVER_TEXT' && selectedTarget.channelId === channel.id}
-                onClick={() => onSelectChannel(channel)}
-              />
-            ))}
-          </ChannelGroup>
-        )}
-        {!channelsLoading && !channelsError && voiceChannels.length > 0 && (
-          <ChannelGroup title="Canais de voz">
-            {voiceChannels.map(channel => (
-              <div key={channel.id}>
-                <ChannelButton
-                  label={channel.name}
-                  icon={activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id ? '◉' : '◖'}
-                  active={(selectedTarget?.kind === 'SERVER_VOICE' && selectedTarget.channelId === channel.id) ||
-                    (activeMediaTarget?.kind === 'SERVER_VOICE' && activeMediaTarget.channelId === channel.id)}
-                  onClick={() => onSelectChannel(channel)}
-                />
-                {(voiceSessionsByChannel[channel.id] ?? []).map(session => {
-                  const userId = String(session.userId);
-                  const mine = userId === String(currentUserId);
-                  const speaking = activeMediaTarget?.kind === 'SERVER_VOICE' &&
-                    activeMediaTarget.channelId === channel.id &&
-                    speakingUserIds.includes(userId);
-                  const selectionKey = `${channel.id}:${userId}`;
-                  const selected = !mine && selectedVoiceParticipant === selectionKey;
-                  const volume = participantVolumes[userId] ?? storedParticipantVolume(userId);
-                  return (
-                    <div key={session.userId} className="ml-7">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!mine) setSelectedVoiceParticipant(current => current === selectionKey ? null : selectionKey);
-                        }}
-                        className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition ${selected ? 'bg-white/7' : 'hover:bg-white/5'} ${speaking ? 'text-emerald-200' : 'text-slate-400'}`}
-                        aria-label={mine ? `${session.userName} (você)` : `Configurar áudio de ${session.userName}`}
-                        aria-expanded={mine ? undefined : selected}
-                      >
-                        <div className="relative shrink-0">
-                          <Avatar name={session.userName} small />
-                          <span
-                            className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-slate-900 transition ${speaking ? 'bg-emerald-400' : 'bg-slate-600'}`}
-                            aria-label={speaking ? `${session.userName} está falando` : `${session.userName} não está falando`}
-                          />
-                        </div>
-                        <span className="min-w-0 flex-1 truncate">
-                          {mine ? 'Você' : session.userName}
-                        </span>
-                        <span title={session.microphoneEnabled ? 'Microfone ligado' : 'Microfone desligado'}>
-                          {session.microphoneEnabled ? '🎙' : '🔇'}
-                        </span>
-                      </button>
-                      {selected && (
-                        <label className="mx-2 mb-1.5 mt-1 flex items-center gap-2 rounded-lg bg-slate-950/50 px-2 py-2 text-[10px] text-slate-500">
-                          <span className="shrink-0">Volume</span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.05"
-                            value={volume}
-                            onChange={event => onParticipantVolumeChange(userId, Number(event.currentTarget.value))}
-                            className="h-1 min-w-0 flex-1 accent-violet-400"
-                            aria-label={`Volume de ${session.userName}`}
-                          />
-                          <span className="w-7 text-right">{Math.round(volume * 100)}%</span>
-                        </label>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </ChannelGroup>
-        )}
-
-      </div>
-    </>
-  );
-}
-
-function ServerMembersPanel({
-  server,
-  currentUserId,
-  members,
-  loading,
-  friends,
-  onMediaDevicesMountAction,
-}: {
-  server: ServerSummary;
-  currentUserId: string;
-  members: ServerMember[];
-  loading: boolean;
-  friends: User[];
-  onMediaDevicesMountAction: (element: HTMLDivElement | null) => void;
-}) {
-  const [selectedMember, setSelectedMember] = useState<ServerMember | null>(null);
-  const [sendingToId, setSendingToId] = useState<string | null>(null);
-  const [sentRequests, setSentRequests] = useState<Set<string>>(new Set());
-  const friendIds = useMemo(() => new Set(friends.map(friend => String(friend.id))), [friends]);
-
-  async function addFriend(member: ServerMember) {
-    const userId = String(member.userId);
-    if (userId === String(currentUserId) || friendIds.has(userId) || sentRequests.has(userId) || sendingToId) return;
-    setSendingToId(userId);
-    try {
-      await api.post('/friendships/send', { targetUserId: member.userId });
-      setSentRequests(previous => new Set(previous).add(userId));
-      toast.success(`Solicitação enviada para ${member.userName}.`);
-    } catch (error) {
-      toast.error(errorMessage(error, 'Não foi possível enviar a solicitação de amizade.'));
-    } finally {
-      setSendingToId(null);
-    }
-  }
-
-  return (
-    <aside className="hidden w-64 shrink-0 flex-col border-l border-white/7 bg-slate-900 xl:flex" aria-label={`Membros de ${server.name}`}>
-      <header className="border-b border-white/7 px-4 py-5">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Membros — {members.length}</h2>
-        <p className="mt-1 truncate text-xs text-slate-600">{server.name}</p>
-      </header>
-
-      {selectedMember && (
-        <section className="border-b border-white/7 p-4" aria-label={`Detalhes de ${selectedMember.userName}`}>
-          <div className="flex items-center gap-3">
-            <Avatar name={selectedMember.userName} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-white">{selectedMember.userName}</p>
-              <p className="text-xs text-slate-500">{selectedMember.role === 'OWNER' ? 'Proprietário' : 'Membro'}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSelectedMember(null)}
-              className="grid h-7 w-7 place-items-center rounded-lg text-slate-500 transition hover:bg-white/7 hover:text-white"
-              aria-label="Fechar detalhes do membro"
-            >
-              ×
-            </button>
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-12">
+        <div className="w-full max-w-md text-center">
+          <div className="mx-auto grid h-20 w-20 place-items-center rounded-[28px] text-3xl font-semibold text-white" style={{ backgroundColor: colorFor(server.id) }} aria-hidden="true">
+            {initials(server.name, 2)}
           </div>
-          <button
-            type="button"
-            onClick={() => void addFriend(selectedMember)}
-            disabled={String(selectedMember.userId) === String(currentUserId) || friendIds.has(String(selectedMember.userId)) || sentRequests.has(String(selectedMember.userId)) || sendingToId !== null}
-            className={`${primaryButtonClass} mt-4 w-full text-xs`}
-          >
-            {String(selectedMember.userId) === String(currentUserId)
-              ? 'Este é você'
-              : friendIds.has(String(selectedMember.userId))
-                ? 'Já é seu amigo'
-                : sentRequests.has(String(selectedMember.userId))
-                  ? 'Solicitação enviada'
-                  : sendingToId === String(selectedMember.userId)
-                    ? 'Enviando…'
-                    : 'Adicionar amigo'}
-          </button>
-        </section>
-      )}
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {loading && <p className="px-2 py-3 text-xs text-slate-500">Atualizando membros…</p>}
-        {!loading && members.map(member => (
-          <button
-            key={member.userId}
-            type="button"
-            onClick={() => setSelectedMember(member)}
-            className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition ${selectedMember?.userId === member.userId ? 'bg-violet-500/12 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}
-            aria-label={`Ver ${member.userName}`}
-          >
-            <Avatar name={member.userName} small />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium">{String(member.userId) === String(currentUserId) ? `${member.userName} (você)` : member.userName}</p>
-              <p className="text-[10px] text-slate-600">{member.role === 'OWNER' ? 'Proprietário' : 'Membro'}</p>
-            </div>
-          </button>
-        ))}
-        {!loading && members.length === 0 && <p className="px-2 py-3 text-xs text-slate-600">Nenhum membro disponível.</p>}
-      </div>
-      <div ref={onMediaDevicesMountAction} className="shrink-0" aria-label="Controles de dispositivos de mídia" />
-    </aside>
-  );
-}
-
-function HomeSidebar({
-  currentUser,
-  view,
-  friends,
-  directs,
-  requests,
-  invites,
-  selectedTarget,
-  loading,
-  error,
-  busyAction,
-  searchEmail,
-  foundUser,
-  searchComplete,
-  searching,
-  onView,
-  onSearchEmail,
-  onSearch,
-  onSendRequest,
-  onFriend,
-  onDirect,
-  onAnswerRequest,
-  onAcceptInvite,
-  onRetry,
-  onClose,
-}: {
-  currentUser: CurrentUser;
-  view: HomeView;
-  friends: User[];
-  directs: DirectChannel[];
-  requests: FriendRequest[];
-  invites: ServerInvite[];
-  selectedTarget: SelectedTarget | null;
-  loading: boolean;
-  error: string | null;
-  busyAction: string | null;
-  searchEmail: string;
-  foundUser: User | null;
-  searchComplete: boolean;
-  searching: boolean;
-  onView: (view: HomeView) => void;
-  onSearchEmail: (value: string) => void;
-  onSearch: (event: FormEvent<HTMLFormElement>) => void;
-  onSendRequest: () => void;
-  onFriend: (friend: User) => void;
-  onDirect: (channel: DirectChannel) => void;
-  onAnswerRequest: (request: FriendRequest, decision: 'accept' | 'reject') => void;
-  onAcceptInvite: (invite: ServerInvite) => void;
-  onRetry: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <>
-      <header className="border-b border-white/7 p-4">
-        <div className="flex items-center gap-3">
-          <Avatar name={currentUser.name} />
-          <div className="min-w-0 flex-1">
-            <h1 className="truncate font-semibold text-white">{currentUser.name}</h1>
-            <p className="truncate text-xs text-slate-500">{currentUser.email}</p>
+          <h2 className="mt-6 text-[28px] font-bold leading-tight text-header">Boas-vindas a {server.name}</h2>
+          <p className="mt-2 text-muted">
+            {hasChannels ? 'Escolha um canal na barra lateral para começar a conversar.' : 'Este é o começo do seu servidor. Siga os passos abaixo para deixá-lo pronto.'}
+          </p>
+          <div className="mt-8 space-y-2 text-left">
+            <WelcomeStep icon={<UserPlus size={22} />} title="Convide seus amigos" onClick={onInvite} />
+            {owner && <WelcomeStep icon={<MessageSquarePlus size={22} />} title="Crie um canal" onClick={onCreateChannel} />}
+            <WelcomeStep icon={<Hash size={22} />} title="Ver canais" className="md:hidden" onClick={onOpenNavigation} />
           </div>
-          <button type="button" onClick={onClose} className="text-xl text-slate-400 md:hidden" aria-label="Fechar navegação">×</button>
-        </div>
-      </header>
-
-      <div className="grid grid-cols-2 gap-2 border-b border-white/7 p-3">
-        <HomeTab active={view === 'friends'} label="Amigos" count={friends.length} onClick={() => onView('friends')} />
-        <HomeTab active={view === 'directs'} label="Mensagens" count={directs.length} onClick={() => onView('directs')} />
-        <HomeTab active={view === 'requests'} label="Pedidos" count={requests.length} onClick={() => onView('requests')} />
-        <HomeTab active={view === 'invites'} label="Convites" count={invites.length} onClick={() => onView('invites')} />
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {loading && <SidebarState title="Carregando" description="Buscando seus contatos e convites…" />}
-        {!loading && error && <SidebarError message={error} onRetry={onRetry} />}
-
-        {!loading && !error && view === 'friends' && (
-          <div className="space-y-4">
-            <form onSubmit={onSearch} className="space-y-2">
-              <label htmlFor="friend-search" className="text-xs font-semibold uppercase tracking-wider text-slate-500">Adicionar amigo</label>
-              <div className="flex gap-2">
-                <input
-                  id="friend-search"
-                  type="email"
-                  className={inputClass}
-                  placeholder="email@exemplo.com"
-                  value={searchEmail}
-                  onChange={event => onSearchEmail(event.target.value)}
-                  required
-                />
-                <button type="submit" className="rounded-xl bg-white/8 px-3 text-slate-200 hover:bg-white/12 disabled:opacity-50" disabled={searching} aria-label="Buscar usuário">
-                  {searching ? '…' : '⌕'}
-                </button>
-              </div>
-            </form>
-
-            {foundUser && (
-              <div className="rounded-xl border border-violet-400/20 bg-violet-400/8 p-3">
-                <div className="flex items-center gap-3">
-                  <Avatar name={foundUser.name} small />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-white">{foundUser.name}</p>
-                    <p className="truncate text-xs text-slate-400">Usuário encontrado</p>
-                  </div>
-                </div>
-                <button type="button" onClick={onSendRequest} disabled={busyAction !== null || foundUser.id === currentUser.id} className={`${primaryButtonClass} mt-3 w-full`}>
-                  {foundUser.id === currentUser.id ? 'Este é você' : busyAction === 'send-friend-request' ? 'Enviando…' : 'Enviar pedido'}
-                </button>
-              </div>
-            )}
-            {searchComplete && !foundUser && <p className="text-sm text-slate-500">Nenhum usuário encontrado.</p>}
-
-            <ListHeading>Seus amigos</ListHeading>
-            {friends.map(friend => (
-              <PersonButton
-                key={friend.id}
-                name={friend.name}
-                detail="Amigo"
-                busy={busyAction === `direct-${friend.id}`}
-                onClick={() => onFriend(friend)}
-              />
-            ))}
-            {friends.length === 0 && <EmptyList text="Você ainda não tem amigos aceitos." />}
-          </div>
-        )}
-
-        {!loading && !error && view === 'directs' && (
-          <div className="space-y-2">
-            <ListHeading>Mensagens diretas</ListHeading>
-            {directs.map(channel => (
-              <PersonButton
-                key={channel.id}
-                name={channel.participantName}
-                detail="Conversa privada"
-                active={(selectedTarget?.kind === 'DIRECT' || selectedTarget?.kind === 'DIRECT_CALL') && selectedTarget.channelId === channel.id}
-                onClick={() => onDirect(channel)}
-              />
-            ))}
-            {directs.length === 0 && <EmptyList text="Clique em um amigo para iniciar uma conversa." />}
-          </div>
-        )}
-
-        {!loading && !error && view === 'requests' && (
-          <div className="space-y-3">
-            <ListHeading>Pedidos de amizade</ListHeading>
-            {requests.map(request => (
-              <article key={request.id} className="rounded-xl border border-white/7 bg-white/4 p-3">
-                <div className="flex items-center gap-3">
-                  <Avatar name={request.requesterName} small />
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-200">{request.requesterName}</p>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button type="button" className={primaryButtonClass} disabled={busyAction !== null} onClick={() => onAnswerRequest(request, 'accept')}>
-                    {busyAction === `accept-request-${request.id}` ? 'Aceitando…' : 'Aceitar'}
-                  </button>
-                  <button type="button" className={secondaryButtonClass} disabled={busyAction !== null} onClick={() => onAnswerRequest(request, 'reject')}>
-                    {busyAction === `reject-request-${request.id}` ? 'Rejeitando…' : 'Rejeitar'}
-                  </button>
-                </div>
-              </article>
-            ))}
-            {requests.length === 0 && <EmptyList text="Nenhum pedido de amizade pendente." />}
-          </div>
-        )}
-
-        {!loading && !error && view === 'invites' && (
-          <div className="space-y-3">
-            <ListHeading>Convites de servidor</ListHeading>
-            {invites.map(invite => (
-              <article key={invite.id} className="rounded-xl border border-white/7 bg-white/4 p-3">
-                <p className="truncate text-sm font-semibold text-white">{invite.serverName}</p>
-                <p className="mt-1 text-xs text-slate-500">Convite de {invite.inviterName}</p>
-                <button type="button" className={`${primaryButtonClass} mt-3 w-full`} disabled={busyAction !== null} onClick={() => onAcceptInvite(invite)}>
-                  {busyAction === `accept-invite-${invite.id}` ? 'Entrando…' : 'Aceitar convite'}
-                </button>
-              </article>
-            ))}
-            {invites.length === 0 && <EmptyList text="Nenhum convite de servidor pendente." />}
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
-
-function HomeWelcome({
-  currentUser,
-  friendsCount,
-  requestsCount,
-  invitesCount,
-  onNavigate,
-}: {
-  currentUser: CurrentUser;
-  friendsCount: number;
-  requestsCount: number;
-  invitesCount: number;
-  onNavigate: (view: HomeView) => void;
-}) {
-  return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-20 sm:px-10 md:py-12">
-      <div className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center">
-        <span className="text-sm font-semibold text-violet-300">INÍCIO</span>
-        <h2 className="mt-2 text-3xl font-bold tracking-tight text-white sm:text-4xl">Olá, {currentUser.name}.</h2>
-        <p className="mt-3 max-w-xl text-slate-400">Converse com amigos, acompanhe seus convites ou entre em uma comunidade.</p>
-        <div className="mt-8 grid gap-3 sm:grid-cols-3">
-          <DashboardCard value={friendsCount} label="amigos" onClick={() => onNavigate('friends')} />
-          <DashboardCard value={requestsCount} label="pedidos pendentes" onClick={() => onNavigate('requests')} />
-          <DashboardCard value={invitesCount} label="convites de servidor" onClick={() => onNavigate('invites')} />
-        </div>
-        <div className="mt-8 rounded-2xl border border-white/7 bg-white/3 p-6">
-          <h3 className="font-semibold text-white">Comece uma conversa</h3>
-          <p className="mt-1 text-sm text-slate-400">Abra a navegação e clique em um amigo. O canal privado será encontrado ou criado automaticamente.</p>
-          <button type="button" onClick={() => onNavigate('friends')} className={`${primaryButtonClass} mt-4`}>Ver amigos</button>
         </div>
       </div>
     </section>
   );
 }
 
-function ServerWelcome({ server, onOpenNavigation }: { server: ServerSummary; onOpenNavigation: () => void }) {
+function WelcomeStep({ icon, title, className = '', onClick }: { icon: ReactNode; title: string; className?: string; onClick: () => void }) {
   return (
-    <section className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-6 py-20 text-center md:py-10">
-      <div className="max-w-lg">
-        <div className="mx-auto grid h-20 w-20 place-items-center rounded-3xl bg-violet-500/15 text-3xl font-bold text-violet-300">
-          {initial(server.name)}
-        </div>
-        <h2 className="mt-6 text-3xl font-bold text-white">Bem-vindo a {server.name}</h2>
-        <p className="mt-3 text-slate-400">Selecione um canal de texto ou voz para participar da comunidade.</p>
-        <button type="button" onClick={onOpenNavigation} className={`${primaryButtonClass} mt-6 md:hidden`}>Ver canais</button>
-      </div>
-    </section>
-  );
-}
-
-function Modal({ title, description, onClose, children }: { title: string; description: string; onClose: () => void; children: ReactNode }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-      onMouseDown={event => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-      onKeyDown={event => {
-        if (event.key === 'Escape') onClose();
-      }}
-    >
-      <section role="dialog" aria-modal="true" aria-labelledby="workspace-modal-title" aria-describedby="workspace-modal-description" className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 id="workspace-modal-title" className="text-lg font-bold text-white">{title}</h2>
-            <p id="workspace-modal-description" className="mt-1 text-sm text-slate-400">{description}</p>
-          </div>
-          <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-xl text-slate-400 hover:bg-white/8 hover:text-white" aria-label="Fechar">×</button>
-        </div>
-        <div className="mt-5">{children}</div>
-      </section>
-    </div>
-  );
-}
-
-function ModalActions({ busy, disabled = false, onCancel, submitLabel }: { busy: boolean; disabled?: boolean; onCancel: () => void; submitLabel: string }) {
-  return (
-    <div className="flex justify-end gap-2 pt-2">
-      <button type="button" className={secondaryButtonClass} onClick={onCancel} disabled={busy}>Cancelar</button>
-      <button type="submit" className={primaryButtonClass} disabled={busy || disabled}>{busy ? 'Aguarde…' : submitLabel}</button>
-    </div>
-  );
-}
-
-function Field({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
-  return (
-    <div>
-      <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium text-slate-200">{label}</label>
-      {children}
-    </div>
-  );
-}
-
-function Avatar({ name, small = false }: { name: string; small?: boolean }) {
-  return (
-    <span className={`grid shrink-0 place-items-center rounded-xl bg-linear-to-br from-violet-500/30 to-cyan-500/20 font-bold text-violet-200 ${small ? 'h-9 w-9 text-sm' : 'h-11 w-11'}`} aria-hidden="true">
-      {initial(name)}
-    </span>
-  );
-}
-
-function HomeTab({ active, label, count, onClick }: { active: boolean; label: string; count: number; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className={`flex items-center justify-between rounded-xl px-3 py-2 text-left text-xs font-medium transition ${active ? 'bg-violet-500/15 text-violet-200' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}>
-      <span>{label}</span>
-      <span className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px]">{count}</span>
-    </button>
-  );
-}
-
-function ChannelGroup({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="mb-5">
-      <h2 className="mb-1 px-2 text-[11px] font-bold uppercase tracking-wider text-slate-500">{title}</h2>
-      <div className="space-y-0.5">{children}</div>
-    </section>
-  );
-}
-
-function ChannelButton({ label, icon, active, onClick }: { label: string; icon: string; active: boolean; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${active ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}>
-      <span className="w-5 text-center text-base text-slate-500" aria-hidden="true">{icon}</span>
-      <span className="truncate">{label}</span>
-    </button>
-  );
-}
-
-function PersonButton({ name, detail, active = false, busy = false, onClick }: { name: string; detail: string; active?: boolean; busy?: boolean; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} disabled={busy} className={`flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition disabled:opacity-60 ${active ? 'bg-violet-500/15' : 'hover:bg-white/5'}`}>
-      <Avatar name={name} small />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm font-medium text-slate-200">{name}</span>
-        <span className="block truncate text-xs text-slate-500">{busy ? 'Abrindo conversa…' : detail}</span>
-      </span>
-    </button>
-  );
-}
-
-function SidebarState({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="px-3 py-10 text-center">
-      <p className="text-sm font-medium text-slate-300">{title}</p>
-      <p className="mt-1 text-xs leading-relaxed text-slate-500">{description}</p>
-    </div>
-  );
-}
-
-function SidebarError({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="rounded-xl border border-red-400/15 bg-red-400/8 p-3 text-center">
-      <p className="text-sm text-red-200">{message}</p>
-      <button type="button" onClick={onRetry} className="mt-3 text-xs font-semibold text-red-100 underline underline-offset-4">Tentar novamente</button>
-    </div>
-  );
-}
-
-function EmptyList({ text }: { text: string }) {
-  return <p className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">{text}</p>;
-}
-
-function ListHeading({ children }: { children: ReactNode }) {
-  return <h2 className="px-1 text-[11px] font-bold uppercase tracking-wider text-slate-500">{children}</h2>;
-}
-
-function DashboardCard({ value, label, onClick }: { value: number; label: string; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="rounded-2xl border border-white/7 bg-white/3 p-5 text-left transition hover:-translate-y-0.5 hover:border-violet-400/20 hover:bg-violet-400/5">
-      <span className="block text-3xl font-bold text-white">{value}</span>
-      <span className="mt-1 block text-sm text-slate-400">{label}</span>
+    <button type="button" onClick={onClick} className={`flex w-full items-center gap-4 rounded-lg bg-sidebar p-4 text-left transition hover:bg-hover ${className}`}>
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-brand/20 text-[#949cf7]">{icon}</span>
+      <span className="flex-1 font-semibold text-header">{title}</span>
+      <span className="text-interactive" aria-hidden="true">›</span>
     </button>
   );
 }

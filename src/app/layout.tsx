@@ -1,15 +1,15 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Noto_Sans } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "react-hot-toast";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const appSans = Noto_Sans({
+  variable: "--font-app-sans",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const appMono = Geist_Mono({
+  variable: "--font-app-mono",
   subsets: ["latin"],
 });
 
@@ -26,27 +26,32 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${appSans.variable} ${appMono.variable} antialiased`}
       >
         {children}
         
         <Toaster 
-          position="top-right"
+          position="bottom-center"
           toastOptions={{
             duration: 4000,
             style: {
-              background: '#111827',
-              color: '#fff',
+              background: '#111214',
+              color: '#dbdee1',
+              border: '1px solid rgba(255,255,255,0.06)',
+              borderRadius: '8px',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+              fontSize: '14px',
+              fontWeight: 500,
             },
             success: {
               iconTheme: {
-                primary: '#16a34a',
+                primary: '#23a55a',
                 secondary: 'white',
               },
             },
             error: {
               iconTheme: {
-                primary: '#dc2626',
+                primary: '#f23f43',
                 secondary: 'white',
               },
             },

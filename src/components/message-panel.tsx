@@ -1,7 +1,28 @@
 'use client';
 
 import Image from 'next/image';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from 'react';
+import {
+  AtSign,
+  FileText,
+  Hash,
+  Loader2,
+  Phone,
+  PlusCircle,
+  RotateCw,
+  SendHorizontal,
+  Upload,
+  X,
+} from 'lucide-react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type UIEvent,
+} from 'react';
 import toast from 'react-hot-toast';
 import api from '@/src/services/api';
 import {
@@ -22,6 +43,7 @@ import type {
   TextTarget,
 } from '@/src/types';
 import { MessageAttachments } from './message-attachments';
+import { Avatar } from './ui/avatar';
 import { useRealtime } from './realtime-provider';
 
 const HISTORY_PAGE_SIZE = 50;
@@ -51,24 +73,76 @@ function endpoint(target: TextTarget) {
     : `/servers/${target.serverId}/channels/${target.channelId}/messages`;
 }
 
-function formatTimestamp(value: string) {
+const GROUP_WINDOW_MS = 7 * 60 * 1000;
+
+function validDate(value: string) {
   const date = new Date(value);
-  return Number.isNaN(date.valueOf())
-    ? ''
-    : new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(date);
+  return Number.isNaN(date.valueOf()) ? null : date;
+}
+
+function sameDay(first: Date, second: Date) {
+  return first.getFullYear() === second.getFullYear() &&
+    first.getMonth() === second.getMonth() &&
+    first.getDate() === second.getDate();
+}
+
+function formatTime(value: string) {
+  const date = validDate(value);
+  return date ? new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(date) : '';
+}
+
+/** “Hoje às 14:32”, “Ontem às 09:10” ou a data completa, como nos clientes de chat. */
+function formatTimestamp(value: string) {
+  const date = validDate(value);
+  if (!date) return '';
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (sameDay(date, today)) return `Hoje às ${formatTime(value)}`;
+  if (sameDay(date, yesterday)) return `Ontem às ${formatTime(value)}`;
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function formatDay(value: string) {
+  const date = validDate(value);
+  return date ? new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'long', year: 'numeric' }).format(date) : '';
+}
+
+/** Mensagens seguidas do mesmo autor em poucos minutos viram um grupo; uma mudança de dia abre um divisor. */
+function buildTimeline(messages: ChannelMessage[]) {
+  return messages.map((message, index) => {
+    const previous = messages[index - 1];
+    const current = validDate(message.createdAt);
+    const before = previous ? validDate(previous.createdAt) : null;
+    const newDay = !!current && (!before || !sameDay(before, current));
+    const grouped = !newDay && previous != null &&
+      String(previous.authorId) === String(message.authorId) &&
+      Date.parse(message.createdAt) - Date.parse(previous.createdAt) < GROUP_WINDOW_MS;
+    return { message, grouped, newDay };
+  });
 }
 
 interface MessagePanelProps {
   currentUser: CurrentUser;
   target: TextTarget;
   onStartCall?: () => void;
+  /** Elemento exibido antes do título, como o botão de navegação no celular. */
+  headerStart?: ReactNode;
+  /** Ações extras à direita do cabeçalho, como a lista de membros. */
+  headerActions?: ReactNode;
 }
 
 export default function MessagePanel(props: MessagePanelProps) {
   return <MessagePanelContent key={`${props.target.kind}-${props.target.channelId}`} {...props} />;
 }
 
-function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelProps) {
+function MessagePanelContent({ currentUser, target, onStartCall, headerStart, headerActions }: MessagePanelProps) {
   const { connected, subscribeMessages } = useRealtime();
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -326,110 +400,137 @@ function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelP
     }
   }
 
+  const timeline = buildTimeline(messages);
+  const isServerChannel = target.kind === 'SERVER_TEXT';
+  const placeholder = isServerChannel ? `Conversar em #${target.title}` : `Conversar com @${target.title}`;
+  const remainingCharacters = 4000 - draft.length;
+
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-(--surface-main)">
-      <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/6 px-5">
-        <div className="min-w-0">
-          <h1 className="truncate text-base font-semibold text-white">
-            {target.kind === 'SERVER_TEXT' ? '# ' : ''}{target.title}
-          </h1>
-          <p className="truncate text-xs text-slate-400">{target.subtitle || 'Conversa em tempo real'}</p>
-        </div>
-        <div className="flex items-center gap-2">
+    <section
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-main"
+      onDragEnter={event => {
+        if (!event.dataTransfer.types.includes('Files')) return;
+        event.preventDefault();
+        setDraggingFiles(true);
+      }}
+      onDragOver={event => {
+        if (!event.dataTransfer.types.includes('Files')) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+        setDraggingFiles(true);
+      }}
+      onDragLeave={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFiles(false);
+      }}
+      onDrop={event => {
+        event.preventDefault();
+        setDraggingFiles(false);
+        addFiles(Array.from(event.dataTransfer.files));
+      }}
+    >
+      <header className="flex h-12 shrink-0 items-center gap-2 px-2 shadow-[0_1px_0_rgba(4,4,5,0.2),0_1.5px_0_rgba(6,6,7,0.05),0_2px_0_rgba(4,4,5,0.05)] sm:px-4">
+        {headerStart}
+        {isServerChannel
+          ? <Hash size={24} className="shrink-0 text-faint" aria-hidden="true" />
+          : <AtSign size={22} className="shrink-0 text-faint" aria-hidden="true" />}
+        <h1 className="min-w-0 truncate text-base font-semibold text-header">{target.title}</h1>
+        {isServerChannel && target.subtitle && (
+          <>
+            <span className="mx-2 hidden h-6 w-px shrink-0 bg-divider md:block" aria-hidden="true" />
+            <p className="hidden min-w-0 truncate text-sm text-muted md:block">{target.subtitle}</p>
+          </>
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {!connected && (
+            <span className="flex items-center gap-1.5 rounded-full bg-warning/15 px-2.5 py-1 text-xs font-semibold text-warning" role="status">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-warning" />
+              Reconectando…
+            </span>
+          )}
           {target.kind === 'DIRECT' && onStartCall && (
             <button
               type="button"
               onClick={onStartCall}
-              className="inline-flex items-center gap-1 rounded-xl border border-violet-400/20 bg-violet-500/10 px-3 py-2 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/20"
+              className="has-tooltip relative grid h-8 w-8 place-items-center rounded text-interactive transition hover:text-header"
               aria-label="Iniciar chamada"
             >
-              <span aria-hidden="true">◉</span><span className="hidden sm:inline">Iniciar chamada</span>
+              <Phone size={22} />
+              <span className="tooltip tooltip-top text-xs">Iniciar chamada de voz</span>
             </button>
           )}
-          <span className={`status-pill ${connected ? 'status-online' : 'status-warning'}`}>
-            <span className="status-dot" />
-            {connected ? 'Tempo real ativo' : 'Reconectando'}
-          </span>
+          {headerActions}
         </div>
       </header>
 
       <div
         ref={scrollContainerRef}
         onScroll={handleHistoryScroll}
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8"
+        className="min-h-0 flex-1 overflow-y-auto pb-6"
         aria-label="Histórico de mensagens"
       >
         {loadingOlder && (
-          <p className="mb-4 text-center text-xs text-slate-500" role="status">Carregando mensagens anteriores…</p>
+          <p className="py-3 text-center text-xs text-muted" role="status">Carregando mensagens anteriores…</p>
         )}
-        {loading && <EmptyState icon="…" title="Carregando mensagens" description="Buscando o histórico desta conversa." />}
+        {loading && <HistorySkeleton />}
         {!loading && historyError && messages.length === 0 && (
-          <EmptyState icon="!" title="Histórico indisponível" description="Você ainda pode tentar enviar uma nova mensagem." />
+          <div className="mx-4 mt-6 rounded-md bg-danger/10 px-4 py-3 text-sm text-text">
+            Não foi possível carregar o histórico. Você ainda pode enviar uma nova mensagem.
+          </div>
         )}
-        {!loading && !historyError && messages.length === 0 && (
-          <EmptyState icon="✦" title={`Início de ${target.title}`} description="Envie a primeira mensagem desta conversa." />
+        {!loading && !historyError && historyComplete && (
+          <ConversationStart target={target} />
         )}
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-1">
-          {messages.map((message, index) => {
-            const mine = String(message.authorId) === String(currentUser.id);
-            const previous = messages[index - 1];
-            const grouped = previous != null &&
-              String(previous.authorId) === String(message.authorId) &&
-              Date.parse(message.createdAt) - Date.parse(previous.createdAt) < 5 * 60 * 1000;
-            return (
-              <article key={message.id} className={`message-row ${mine ? 'message-row-mine' : ''} ${grouped ? 'mt-1' : 'mt-5'}`}>
-                {!grouped && (
-                  <div className="message-avatar" aria-hidden="true">{message.authorName.charAt(0).toUpperCase()}</div>
-                )}
-                <div className={`flex min-w-0 flex-col ${mine ? 'items-end' : 'items-start'} ${grouped ? (mine ? 'mr-11' : 'ml-11') : ''}`}>
-                  {!grouped && (
-                    <div className={`mb-1 flex items-baseline gap-2 ${mine ? 'justify-end' : ''}`}>
-                      <strong className="text-sm text-slate-100">{mine ? 'Você' : message.authorName}</strong>
-                      <time className="text-[11px] text-slate-500">{formatTimestamp(message.createdAt)}</time>
-                    </div>
-                  )}
-                  {message.content && (
-                    <p className={`message-bubble ${mine ? 'message-bubble-mine' : ''}`}><LinkifiedText text={message.content} /></p>
-                  )}
-                  <MessageAttachments
-                    attachments={message.attachments ?? []}
-                    onExpiredAction={refreshAttachmentUrls}
-                  />
+        <div className="flex flex-col">
+          {timeline.map(({ message, grouped, newDay }) => (
+            <div key={message.id}>
+              {newDay && (
+                <div role="separator" className="mx-4 my-2 flex items-center gap-1 pt-2">
+                  <span className="h-px flex-1 bg-divider" />
+                  <span className="px-1 text-xs font-semibold text-faint">{formatDay(message.createdAt)}</span>
+                  <span className="h-px flex-1 bg-divider" />
                 </div>
+              )}
+              <article
+                className={`message-line relative pl-[72px] pr-4 ${grouped ? 'py-0.5' : 'mt-[17px] min-h-11 py-0.5'}`}
+                aria-label={`${message.authorName}, ${formatTimestamp(message.createdAt)}`}
+              >
+                {grouped ? (
+                  <time className="message-hover-time absolute left-0 top-1 w-[56px] text-right text-[11px] leading-[1.375rem] text-faint" dateTime={message.createdAt}>
+                    {formatTime(message.createdAt)}
+                  </time>
+                ) : (
+                  <>
+                    <span className="absolute left-4 top-0.5">
+                      <Avatar name={message.authorName} seed={String(message.authorId)} size="md" />
+                    </span>
+                    <h3 className="flex items-baseline gap-2 leading-[1.375rem]">
+                      <span className={`truncate text-base font-medium ${String(message.authorId) === String(currentUser.id) ? 'text-[#c9c3ff]' : 'text-header'}`}>
+                        {message.authorName}
+                      </span>
+                      <time className="shrink-0 text-xs text-faint" dateTime={message.createdAt}>{formatTimestamp(message.createdAt)}</time>
+                    </h3>
+                  </>
+                )}
+                {message.content && (
+                  <p className="whitespace-pre-wrap text-base leading-[1.375rem] text-text [overflow-wrap:anywhere]">
+                    <LinkifiedText text={message.content} />
+                  </p>
+                )}
+                <MessageAttachments
+                  attachments={message.attachments ?? []}
+                  onExpiredAction={refreshAttachmentUrls}
+                />
               </article>
-            );
-          })}
-
+            </div>
+          ))}
         </div>
       </div>
 
       <form
         onSubmit={sendMessage}
-        onDragEnter={event => {
-          event.preventDefault();
-          setDraggingFiles(true);
-        }}
-        onDragOver={event => {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'copy';
-          setDraggingFiles(true);
-        }}
-        onDragLeave={event => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFiles(false);
-        }}
-        onDrop={event => {
-          event.preventDefault();
-          setDraggingFiles(false);
-          addFiles(Array.from(event.dataTransfer.files));
-        }}
-        className="relative z-10 shrink-0 border-t border-white/6 bg-(--surface-main) px-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-3 sm:px-8"
+        className="relative z-10 shrink-0 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
       >
-        <div className={`relative mx-auto max-w-4xl rounded-2xl border bg-white/5 p-2 shadow-2xl shadow-black/10 transition focus-within:border-violet-400/50 ${draggingFiles ? 'border-violet-400 bg-violet-500/10' : 'border-white/8'}`}>
-          {draggingFiles && (
-            <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center rounded-2xl border-2 border-dashed border-violet-300 bg-slate-950/90 text-sm font-semibold text-violet-100">
-              Solte os arquivos para anexar
-            </div>
-          )}
+        <div className="rounded-lg bg-input">
           {queuedAttachments.length > 0 && (
             <QueuedAttachmentTray
               attachments={queuedAttachments}
@@ -437,7 +538,7 @@ function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelP
               onRetryAction={attachment => void uploadQueuedAttachment(attachment)}
             />
           )}
-          <div className="flex items-end gap-2">
+          <div className="flex items-start">
             <input
               ref={fileInputRef}
               type="file"
@@ -454,11 +555,11 @@ function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelP
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={queuedAttachments.length >= MAX_ATTACHMENTS_PER_MESSAGE}
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-lg text-slate-400 transition hover:bg-white/8 hover:text-violet-200 disabled:cursor-not-allowed disabled:opacity-40"
+              className="has-tooltip relative grid h-11 w-14 shrink-0 place-items-center text-interactive transition hover:text-text disabled:cursor-not-allowed disabled:opacity-40"
               aria-label="Anexar arquivos"
-              title="Anexar arquivos"
             >
-              +
+              <PlusCircle size={24} />
+              <span className="tooltip tooltip-top text-xs">Até 4 arquivos de 10 MiB</span>
             </button>
             <textarea
               value={draft}
@@ -470,32 +571,46 @@ function MessagePanelContent({ currentUser, target, onStartCall }: MessagePanelP
                 addFiles(images);
               }}
               onKeyDown={event => {
-                if (event.key === 'Enter' && !event.shiftKey) {
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
               rows={1}
               maxLength={4000}
-              className="max-h-36 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-white outline-none placeholder:text-slate-500"
-              placeholder={`Mensagem para ${target.kind === 'SERVER_TEXT' ? '#' : ''}${target.title}`}
+              className="max-h-[50vh] min-h-11 flex-1 resize-none bg-transparent py-[11px] pr-2 text-base leading-[1.375rem] text-text outline-none [field-sizing:content] placeholder:text-faint"
+              placeholder={placeholder}
               aria-label="Mensagem"
             />
+            {remainingCharacters <= 500 && (
+              <span className={`self-end pb-3 pr-1 text-xs tabular-nums ${remainingCharacters <= 100 ? 'text-danger' : 'text-faint'}`}>
+                {remainingCharacters}
+              </span>
+            )}
             <button
-              className="icon-button icon-button-primary"
               type="submit"
               disabled={(!draft.trim() && !queuedAttachments.some(attachment => attachment.status === 'uploaded')) ||
                 sending || queuedAttachments.some(attachment => attachment.status !== 'uploaded')}
               aria-label="Enviar mensagem"
+              className="grid h-11 w-12 shrink-0 place-items-center text-interactive transition enabled:hover:text-brand disabled:cursor-not-allowed disabled:opacity-30"
             >
-              {sending ? '…' : '➤'}
+              {sending ? <Loader2 size={20} className="animate-spin" /> : <SendHorizontal size={20} />}
             </button>
           </div>
-          <p className="px-2 pt-1 text-[10px] text-slate-600">
-            Até 4 arquivos de 10 MiB. Imagens, GIFs, vídeos e documentos compatíveis; áudio não é aceito.
-          </p>
         </div>
       </form>
+
+      {draggingFiles && (
+        <div className="pointer-events-none absolute inset-0 z-30 grid animate-fade-in place-items-center bg-black/60 p-6">
+          <div className="w-full max-w-sm rounded-2xl bg-brand p-2 shadow-2xl">
+            <div className="rounded-xl border-2 border-dashed border-white/60 px-6 py-10 text-center text-white">
+              <Upload size={40} className="mx-auto" />
+              <p className="mt-3 text-xl font-bold">Carregar para {isServerChannel ? `#${target.title}` : target.title}</p>
+              <p className="mt-1 text-sm text-white/80">Imagens, GIFs, vídeos e documentos até 10 MiB.</p>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -510,52 +625,52 @@ function QueuedAttachmentTray({
   onRetryAction: (attachment: QueuedAttachment) => void;
 }) {
   return (
-    <div className="mb-2 grid gap-2 border-b border-white/7 pb-2 sm:grid-cols-2" aria-label="Anexos selecionados">
+    <div className="flex gap-3 overflow-x-auto border-b border-black/20 px-3 pb-3 pt-4" aria-label="Anexos selecionados">
       {attachments.map(attachment => (
-        <article key={attachment.localId} className="flex min-w-0 items-center gap-2 rounded-xl bg-slate-950/55 p-2">
+        <article key={attachment.localId} className="relative flex w-[200px] shrink-0 flex-col rounded-md bg-sidebar p-2">
           {attachment.previewUrl && attachment.file.type.startsWith('image/') ? (
-            <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-black/30">
-              <Image src={attachment.previewUrl} alt="" fill unoptimized sizes="48px" className="object-cover" />
+            <div className="relative h-32 w-full overflow-hidden rounded bg-black/30">
+              <Image src={attachment.previewUrl} alt="" fill unoptimized sizes="200px" className="object-contain" />
             </div>
           ) : attachment.previewUrl && attachment.file.type.startsWith('video/') ? (
-            <video src={attachment.previewUrl} muted preload="metadata" className="h-12 w-12 shrink-0 rounded-lg bg-black object-cover" />
+            <video src={attachment.previewUrl} muted preload="metadata" className="h-32 w-full rounded bg-black object-contain" />
           ) : (
-            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-violet-500/10 text-xl" aria-hidden="true">▤</span>
+            <span className="grid h-32 w-full place-items-center rounded bg-floating/60 text-interactive" aria-hidden="true">
+              <FileText size={40} />
+            </span>
           )}
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-slate-200">{attachment.file.name}</p>
-            <p className={`mt-0.5 truncate text-[10px] ${attachment.status === 'error' ? 'text-rose-300' : 'text-slate-500'}`}>
-              {attachment.status === 'reserving' && 'Preparando upload…'}
-              {attachment.status === 'uploading' && `Enviando… ${attachment.progress}%`}
-              {attachment.status === 'uploaded' && `Pronto · ${formatAttachmentSize(attachment.file.size)}`}
-              {attachment.status === 'error' && attachment.error}
-            </p>
-            {(attachment.status === 'uploading' || attachment.status === 'reserving') && (
-              <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/7">
-                <div className="h-full bg-violet-400 transition-all" style={{ width: `${Math.max(4, attachment.progress)}%` }} />
-              </div>
-            )}
-          </div>
-          <div className="flex shrink-0 flex-col gap-1">
+          <p className="mt-2 truncate text-sm text-text">{attachment.file.name}</p>
+          <p className={`truncate text-xs ${attachment.status === 'error' ? 'text-danger' : 'text-muted'}`}>
+            {attachment.status === 'reserving' && 'Preparando upload…'}
+            {attachment.status === 'uploading' && `Enviando… ${attachment.progress}%`}
+            {attachment.status === 'uploaded' && `Pronto · ${formatAttachmentSize(attachment.file.size)}`}
+            {attachment.status === 'error' && attachment.error}
+          </p>
+          {(attachment.status === 'uploading' || attachment.status === 'reserving') && (
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-floating">
+              <div className="h-full bg-brand transition-all" style={{ width: `${Math.max(4, attachment.progress)}%` }} />
+            </div>
+          )}
+          <div className="absolute -right-2 -top-2 flex overflow-hidden rounded-md bg-main shadow-lg ring-1 ring-black/30">
             {attachment.status === 'error' && (
               <button
                 type="button"
                 onClick={() => onRetryAction(attachment)}
-                className="grid h-6 w-6 place-items-center rounded-md text-xs text-violet-300 hover:bg-violet-500/15"
+                className="grid h-8 w-8 place-items-center text-interactive transition hover:bg-hover hover:text-text"
                 aria-label={`Tentar enviar ${attachment.file.name} novamente`}
                 title="Tentar novamente"
               >
-                ↻
+                <RotateCw size={16} />
               </button>
             )}
             <button
               type="button"
               onClick={() => onRemoveAction(attachment)}
-              className="grid h-6 w-6 place-items-center rounded-md text-sm text-slate-500 hover:bg-rose-500/10 hover:text-rose-300"
+              className="grid h-8 w-8 place-items-center text-danger transition hover:bg-hover"
               aria-label={`Remover ${attachment.file.name}`}
               title={attachment.status === 'uploading' || attachment.status === 'reserving' ? 'Cancelar upload' : 'Remover anexo'}
             >
-              ×
+              <X size={16} />
             </button>
           </div>
         </article>
@@ -573,7 +688,7 @@ export function LinkifiedText({ text }: { text: string }) {
         href={part}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-cyan-300 underline decoration-cyan-300/40 underline-offset-2 hover:text-cyan-200"
+        className="text-link hover:underline"
       >
         {part}
       </a>
@@ -581,12 +696,41 @@ export function LinkifiedText({ text }: { text: string }) {
   });
 }
 
-function EmptyState({ icon, title, description }: { icon: string; title: string; description: string }) {
+function ConversationStart({ target }: { target: TextTarget }) {
+  if (target.kind === 'SERVER_TEXT') {
+    return (
+      <div className="mx-4 mb-2 mt-6">
+        <div className="grid h-[68px] w-[68px] place-items-center rounded-full bg-[#41434a] text-header">
+          <Hash size={42} />
+        </div>
+        <h2 className="mt-2 text-[32px] font-bold leading-10 text-header">Boas-vindas a #{target.title}!</h2>
+        <p className="text-muted">Este é o começo do canal #{target.title}.</p>
+      </div>
+    );
+  }
   return (
-    <div className="mx-auto flex max-w-md flex-col items-center py-16 text-center">
-      <div className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-violet-500/12 text-2xl text-violet-300">{icon}</div>
-      <h2 className="font-semibold text-slate-200">{title}</h2>
-      <p className="mt-1 text-sm text-slate-500">{description}</p>
+    <div className="mx-4 mb-2 mt-6">
+      <Avatar name={target.title} seed={target.participantId ?? target.title} size="lg" />
+      <h2 className="mt-2 text-[32px] font-bold leading-10 text-header">{target.title}</h2>
+      <p className="text-muted">
+        Este é o começo do seu histórico de mensagens diretas com <strong className="font-semibold text-text">{target.title}</strong>.
+      </p>
+    </div>
+  );
+}
+
+function HistorySkeleton() {
+  return (
+    <div className="space-y-6 px-4 pt-6" role="status" aria-label="Carregando mensagens">
+      {[[38, 72], [24, 55], [31, 80]].map(([nameWidth, lineWidth]) => (
+        <div key={`${nameWidth}-${lineWidth}`} className="flex gap-4">
+          <span className="h-10 w-10 shrink-0 animate-pulse rounded-full bg-hover" />
+          <div className="flex-1 space-y-2 pt-1">
+            <span className="block h-3 animate-pulse rounded bg-hover" style={{ width: `${nameWidth}%` }} />
+            <span className="block h-3 animate-pulse rounded bg-hover/70" style={{ width: `${lineWidth}%` }} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
