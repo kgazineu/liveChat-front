@@ -60,21 +60,21 @@ export default function LoginPage() {
 
   return (
     <AuthShell
-      eyebrow="Bem-vindo de volta"
-      title="Entre na sua conta"
-      description="Continue suas conversas e encontre sua comunidade."
+      eyebrow="LiveChat"
+      title="Boas-vindas de volta!"
+      description="Estamos muito animados em ver você novamente!"
       footer={
-        <p className="text-center text-sm text-slate-400">
-          Ainda não tem conta?{' '}
-          <Link href="/register" className="font-semibold text-violet-300 transition hover:text-violet-200 hover:underline">
-            Cadastre-se
+        <p className="text-sm text-muted">
+          Precisando de uma conta?{' '}
+          <Link href="/register" className="font-medium text-link hover:underline">
+            Registre-se
           </Link>
         </p>
       }
     >
       <form onSubmit={handleLogin} className="space-y-5">
         <div>
-          <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-200">
+          <label htmlFor="email" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
             Email
           </label>
           <input
@@ -93,14 +93,9 @@ export default function LoginPage() {
         </div>
 
         <div>
-          <div className="mb-2 flex items-center justify-between gap-4">
-            <label htmlFor="password" className="text-sm font-medium text-slate-200">
-              Senha
-            </label>
-            <Link href="/forgot-password" className="text-xs font-medium text-cyan-300 transition hover:text-cyan-200 hover:underline">
-              Esqueci minha senha
-            </Link>
-          </div>
+          <label htmlFor="password" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
+            Senha
+          </label>
           <input
             id="password"
             name="password"
@@ -113,6 +108,9 @@ export default function LoginPage() {
             disabled={loading}
             required
           />
+          <Link href="/forgot-password" className="mt-1.5 inline-block text-sm font-medium text-link hover:underline">
+            Esqueceu sua senha?
+          </Link>
         </div>
 
         <button type="submit" disabled={loading} aria-busy={loading} className={authPrimaryButtonClassName}>
@@ -122,7 +120,7 @@ export default function LoginPage() {
               Entrando...
             </>
           ) : (
-            'Entrar no LiveChat'
+            'Entrar'
           )}
         </button>
       </form>

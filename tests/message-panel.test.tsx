@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import MessagePanel from '@/src/components/message-panel';
 import type { ChannelMessage, CurrentUser, PageResponse } from '@/src/types';
@@ -107,35 +107,25 @@ it('usa o canal privado para histórico, envio e início de chamada', async () =
   expect(mocks.startCall).toHaveBeenCalledOnce();
 });
 
-it('mantém mensagens consecutivas do próprio usuário alinhadas pelo lado direito', async () => {
+it('agrupa mensagens seguidas do mesmo autor sob um único cabeçalho', async () => {
   mocks.get.mockResolvedValue({
     data: page([
-      message({
-        id: 1,
-        content: 'Primeira mensagem própria',
-        authorId: me.id,
-        authorName: me.name,
-        createdAt: '2026-09-22T18:00:00Z',
-      }),
-      message({
-        id: 2,
-        content: 'Segunda mensagem própria',
-        authorId: me.id,
-        authorName: me.name,
-        createdAt: '2026-09-22T18:01:00Z',
-      }),
+      message({ id: 1, content: 'Primeira mensagem', authorId: me.id, authorName: me.name, createdAt: '2026-09-22T18:00:00Z' }),
+      message({ id: 2, content: 'Segunda mensagem', authorId: me.id, authorName: me.name, createdAt: '2026-09-22T18:01:00Z' }),
+      message({ id: 3, content: 'Resposta do Bruno', createdAt: '2026-09-22T18:02:00Z' }),
+      message({ id: 4, content: 'Bem depois', authorId: me.id, authorName: me.name, createdAt: '2026-09-22T18:30:00Z' }),
     ]),
   });
 
   render(<MessagePanel currentUser={me} target={directTarget} />);
 
   const articles = await screen.findAllByRole('article');
-  expect(articles).toHaveLength(2);
-  expect(articles[0]).toHaveClass('message-row-mine');
-  expect(articles[1]).toHaveClass('message-row-mine');
-  expect(articles[1].firstElementChild).toHaveClass('items-end', 'mr-11');
-  expect(articles[1].firstElementChild).not.toHaveClass('ml-11');
-  expect(screen.getByText('Segunda mensagem própria')).toHaveClass('message-bubble-mine');
+  expect(articles).toHaveLength(4);
+  expect(within(articles[0]).getByRole('heading', { name: /Ana/ })).toBeInTheDocument();
+  expect(within(articles[1]).queryByRole('heading')).not.toBeInTheDocument();
+  expect(within(articles[2]).getByRole('heading', { name: /Bruno/ })).toBeInTheDocument();
+  expect(within(articles[3]).getByRole('heading', { name: /Ana/ })).toBeInTheDocument();
+  expect(screen.getAllByRole('separator')).toHaveLength(1);
 });
 
 it('carrega páginas anteriores e mantém a ordem cronológica do histórico', async () => {

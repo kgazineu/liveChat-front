@@ -64,9 +64,9 @@ export default function RegisterPage() {
       title="Crie sua conta"
       description="Seu espaço para conversar, reunir amigos e participar de comunidades."
       footer={
-        <p className="text-center text-sm text-slate-400">
+        <p className="text-sm text-muted">
           Já tem uma conta?{' '}
-          <Link href="/" className="font-semibold text-violet-300 transition hover:text-violet-200 hover:underline">
+          <Link href="/" className="font-medium text-link hover:underline">
             Fazer login
           </Link>
         </p>
@@ -74,7 +74,7 @@ export default function RegisterPage() {
     >
       <form onSubmit={handleRegister} className="space-y-4">
         <div>
-          <label htmlFor="name" className="mb-2 block text-sm font-medium text-slate-200">
+          <label htmlFor="name" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
             Nome
           </label>
           <input
@@ -92,7 +92,7 @@ export default function RegisterPage() {
         </div>
 
         <div>
-          <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-200">
+          <label htmlFor="email" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
             Email
           </label>
           <input
@@ -112,7 +112,7 @@ export default function RegisterPage() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-200">
+            <label htmlFor="password" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
               Senha
             </label>
             <input
@@ -131,7 +131,7 @@ export default function RegisterPage() {
             />
           </div>
           <div>
-            <label htmlFor="password-confirmation" className="mb-2 block text-sm font-medium text-slate-200">
+            <label htmlFor="password-confirmation" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
               Confirmar
             </label>
             <input

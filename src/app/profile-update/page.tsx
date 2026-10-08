@@ -38,21 +38,21 @@ function ProfileUpdateConfirmation() {
         ? 'Por segurança, entre novamente para carregar os dados atualizados em todos os dispositivos.'
         : 'Este link aplica a alteração de nome e/ou e-mail solicitada nas configurações da conta.'}
       footer={
-        <p className="text-center text-sm text-slate-400">
-          <Link href="/" className="font-semibold text-violet-300 transition hover:text-violet-200 hover:underline">
+        <p className="text-sm text-muted">
+          <Link href="/" className="font-medium text-link hover:underline">
             Ir para o login
           </Link>
         </p>
       }
     >
       {confirmed ? (
-        <div role="status" className="rounded-xl border border-emerald-300/15 bg-emerald-300/6 px-4 py-4 text-sm leading-6 text-emerald-100">
+        <div role="status" className="rounded border border-success/40 bg-success/10 px-4 py-4 text-sm leading-6 text-text">
           A confirmação foi concluída e a sessão local foi encerrada.
         </div>
       ) : (
         <div className="space-y-5">
           {!token && (
-            <div role="alert" className="rounded-xl border border-amber-300/20 bg-amber-300/6 px-4 py-3 text-sm leading-6 text-amber-100">
+            <div role="alert" className="rounded border border-warning/40 bg-warning/10 px-4 py-3 text-sm leading-6 text-text">
               Este link não contém um token válido. Abra novamente o link recebido no seu e-mail anterior.
             </div>
           )}
@@ -75,7 +75,7 @@ export default function ProfileUpdatePage() {
   return (
     <Suspense fallback={
       <AuthShell eyebrow="Segurança da conta" title="Validando link" description="Preparando a confirmação do seu perfil.">
-        <div className="text-sm text-slate-400">Carregando confirmação…</div>
+        <div className="text-sm text-muted">Carregando confirmação…</div>
       </AuthShell>
     }>
       <ProfileUpdateConfirmation />

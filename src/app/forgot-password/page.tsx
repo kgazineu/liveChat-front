@@ -49,9 +49,9 @@ export default function ForgotPasswordPage() {
       title="Esqueceu sua senha?"
       description="Informe seu email e enviaremos o próximo passo, caso exista uma conta associada."
       footer={
-        <p className="text-center text-sm text-slate-400">
+        <p className="text-sm text-muted">
           Lembrou sua senha?{' '}
-          <Link href="/" className="font-semibold text-violet-300 transition hover:text-violet-200 hover:underline">
+          <Link href="/" className="font-medium text-link hover:underline">
             Voltar para o login
           </Link>
         </p>
@@ -59,7 +59,7 @@ export default function ForgotPasswordPage() {
     >
       <form onSubmit={handleRequest} className="space-y-5">
         <div>
-          <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-200">
+          <label htmlFor="email" className="mb-2 block text-xs font-bold uppercase tracking-[0.02em] text-muted">
             Email da conta
           </label>
           <input
@@ -78,7 +78,7 @@ export default function ForgotPasswordPage() {
         </div>
 
         {requestComplete ? (
-          <div role="status" aria-live="polite" className="rounded-xl border border-cyan-300/15 bg-cyan-300/[0.06] px-4 py-3 text-sm leading-6 text-cyan-100">
+          <div role="status" aria-live="polite" className="rounded border border-link/40 bg-link/10 px-4 py-3 text-sm leading-6 text-text">
             {SECURITY_MESSAGE}
           </div>
         ) : null}

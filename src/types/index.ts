@@ -200,9 +200,9 @@ export interface MediaPresenceEvent {
 }
 
 export type TextTarget =
-    | { kind: 'DIRECT'; channelId: string; title: string; subtitle?: string }
+    | { kind: 'DIRECT'; channelId: string; title: string; subtitle?: string; participantId?: string }
     | { kind: 'SERVER_TEXT'; serverId: string; channelId: string; title: string; subtitle?: string };
 
 export type MediaTarget =
-    | { kind: 'DIRECT'; channelId: string; title: string }
+    | { kind: 'DIRECT'; channelId: string; title: string; participantId?: string }
     | { kind: 'SERVER_VOICE'; serverId: string; channelId: string; title: string };
