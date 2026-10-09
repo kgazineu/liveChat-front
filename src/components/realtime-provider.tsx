@@ -1,6 +1,6 @@
 'use client';
 
-import { Client, ReconnectionTimeMode } from '@stomp/stompjs';
+import { Client, ReconnectionTimeMode, TickerStrategy } from '@stomp/stompjs';
 
 import {
   createContext,
@@ -119,8 +119,11 @@ export function RealtimeProvider({ children, currentUserId }: { children: ReactN
           reconnectTimeMode: ReconnectionTimeMode.EXPONENTIAL,
           maxReconnectDelay: 60000,
           connectionTimeout: 10000,
+          // Heartbeats detectam conexões mortas atrás de proxies; o Worker evita que abas em segundo plano
+          // atrasem o envio (timers comuns são estrangulados) e o servidor derrube a sessão.
           heartbeatIncoming: 10000,
           heartbeatOutgoing: 10000,
+          heartbeatStrategy: TickerStrategy.Worker,
         });
         client.beforeConnect = async () => {
           const currentToken = await sessionAccessToken();

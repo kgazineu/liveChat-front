@@ -778,14 +778,18 @@ function Workspace({ currentUser }: { currentUser: CurrentUser }) {
     }
     const channelId = activeMediaTarget.channelId;
     const tombstones = voicePresenceTombstonesRef.current.get(channelId);
+    const roomSessions = summary.sessions.filter(session => session.channelKind === 'SERVER_VOICE' &&
+      session.channelId === channelId);
     setVoiceSessionsByChannel(previous => ({
       ...previous,
-      [channelId]: mergeVoiceSessions(
-        previous[channelId] ?? [],
-        summary.sessions.filter(session => session.channelKind === 'SERVER_VOICE' &&
-          session.channelId === channelId &&
-          !tombstones?.has(String(session.userId))),
-      ),
+      // Depois de conferida com o servidor e o LiveKit, a lista da sala substitui a da barra lateral
+      // (remove quem saiu sem o evento chegar); antes disso, só acrescenta.
+      [channelId]: summary.authoritative
+        ? mergeVoiceSessions(roomSessions)
+        : mergeVoiceSessions(
+          previous[channelId] ?? [],
+          roomSessions.filter(session => !tombstones?.has(String(session.userId))),
+        ),
     }));
     setSpeakingUserIds(summary.speakingUserIds.map(String));
   }, [activeMediaTarget]);

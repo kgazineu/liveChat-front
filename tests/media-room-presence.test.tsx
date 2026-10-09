@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { MediaRoom } from '@/src/components/media-room';
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   realtime: { connected: true, connectionRevision: 1 },
   subscribePresence: () => () => undefined,
+  rooms: [] as Array<{ emit: (event: string) => void; remoteParticipants: Map<string, unknown> }>,
 }));
 
 vi.mock('@/src/services/api', () => ({
@@ -38,7 +39,14 @@ vi.mock('livekit-client', () => {
     };
     remoteParticipants = new Map();
     canPlaybackAudio = true;
-    on() { return this; }
+    state = 'connected';
+    handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+    constructor() { mocks.rooms.push(this); }
+    on(event: string, handler: (...args: unknown[]) => void) {
+      this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+      return this;
+    }
+    emit(event: string) { this.handlers.get(event)?.forEach(handler => handler()); }
     connect = vi.fn(async () => undefined);
     disconnect = vi.fn(async () => undefined);
     getActiveDevice() { return ''; }
@@ -77,6 +85,7 @@ beforeEach(() => {
   mocks.patch.mockReset().mockResolvedValue({ data: session() });
   mocks.delete.mockReset().mockResolvedValue({});
   mocks.realtime.connectionRevision = 1;
+  mocks.rooms.length = 0;
 });
 
 function room() {
@@ -119,4 +128,38 @@ it('entra de novo para reativar a presença quando o tempo real reconecta', asyn
 
   await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2));
   expect(mocks.post).toHaveBeenLastCalledWith(endpoint);
+});
+
+it('mostra quem já está na sala de mídia mesmo quando o evento de presença não chegou', async () => {
+  const onSummary = vi.fn();
+  render(
+    <MediaRoom
+      currentUser={currentUser}
+      target={target}
+      visible
+      onOpenAction={() => undefined}
+      onLeaveAction={() => undefined}
+      onSummaryAction={onSummary}
+    />,
+  );
+  await waitFor(() => expect(mocks.patch).toHaveBeenCalled());
+  const getsBefore = mocks.get.mock.calls.length;
+
+  const room = mocks.rooms.at(-1)!;
+  room.remoteParticipants.set('user-2', {
+    identity: 'user-2',
+    name: 'Bruno',
+    isMicrophoneEnabled: false,
+    isCameraEnabled: false,
+    isScreenShareEnabled: false,
+    trackPublications: new Map(),
+  });
+  act(() => room.emit('ParticipantConnected'));
+
+  expect(await screen.findByText('Bruno')).toBeInTheDocument();
+  await waitFor(() => expect(onSummary).toHaveBeenLastCalledWith(expect.objectContaining({
+    sessions: expect.arrayContaining([expect.objectContaining({ userId: 'user-2', microphoneEnabled: false })]),
+  })));
+  // A entrada vista pelo LiveKit dispara uma nova conferência da lista no servidor.
+  await waitFor(() => expect(mocks.get.mock.calls.length).toBeGreaterThan(getsBefore));
 });
