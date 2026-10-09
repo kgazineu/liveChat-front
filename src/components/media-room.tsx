@@ -94,7 +94,20 @@ interface PreviousByteSample {
 export interface MediaRoomSummary {
   sessions: MediaSession[];
   speakingUserIds: string[];
+  /** Verdadeiro depois que a lista foi conferida com o servidor e com o LiveKit: pode substituir a da barra lateral. */
+  authoritative?: boolean;
 }
+
+interface RemoteParticipantView {
+  identity: string;
+  name: string;
+  microphoneEnabled: boolean;
+  cameraEnabled: boolean;
+  screenShareEnabled: boolean;
+}
+
+const PRESENCE_RECONCILE_INTERVAL_MS = 30_000;
+const SYNTHETIC_TIMESTAMP = new Date(0).toISOString();
 
 const EMPTY_MEDIA: LocalMediaState = {
   microphoneEnabled: false,
@@ -356,6 +369,17 @@ function collectTracks(room: Room | null) {
   return { audio, video };
 }
 
+function collectRemoteParticipants(room: Room | null): RemoteParticipantView[] {
+  if (!room) return [];
+  return [...room.remoteParticipants.values()].map(participant => ({
+    identity: participant.identity,
+    name: participant.name || participant.identity,
+    microphoneEnabled: participant.isMicrophoneEnabled,
+    cameraEnabled: participant.isCameraEnabled,
+    screenShareEnabled: participant.isScreenShareEnabled,
+  }));
+}
+
 function allPublishedTracks(room: Room) {
   const tracks: Track[] = [];
   for (const publication of room.localParticipant.trackPublications.values()) {
@@ -508,6 +532,9 @@ export function MediaRoom({
   const [localMedia, setLocalMedia] = useState<LocalMediaState>(EMPTY_MEDIA);
   const [activeSpeakers, setActiveSpeakers] = useState<Set<string>>(new Set());
   const [devicesOpen, setDevicesOpen] = useState(false);
+  const [remoteParticipants, setRemoteParticipants] = useState<RemoteParticipantView[]>([]);
+  const [presenceSynced, setPresenceSynced] = useState(false);
+  const reconcilePresenceRef = useRef<() => void>(() => undefined);
   const [microphoneReady, setMicrophoneReady] = useState(false);
   const [screenShareVolumes, setScreenShareVolumes] = useState<Record<string, number>>({});
   const [devices, setDevices] = useState<DeviceLists>(EMPTY_DEVICES);
@@ -580,6 +607,8 @@ export function MediaRoom({
       setMetrics(EMPTY_METRICS);
       setExpandedTrackId(null);
       setMicrophoneReady(false);
+      setRemoteParticipants([]);
+      setPresenceSynced(false);
     });
 
     const upsertPresence = (event: MediaPresenceEvent) => {
@@ -610,8 +639,43 @@ export function MediaRoom({
     const unsubscribePresence = subscribePresence(upsertPresence);
 
     const refreshTrackViews = () => {
-      if (active) setTrackViews(collectTracks(room));
+      if (!active) return;
+      setTrackViews(collectTracks(room));
+      setRemoteParticipants(collectRemoteParticipants(room));
     };
+
+    // Eventos STOMP podem se perder (conexão meio-aberta, queda durante a entrada de alguém). A lista do servidor é
+    // conferida de novo quando o LiveKit avisa que alguém entrou ou saiu, após reconexões e periodicamente.
+    let reconcileTimer: number | undefined;
+    let reconcileController: AbortController | null = null;
+    const reconcilePresence = () => {
+      if (!active) return;
+      window.clearTimeout(reconcileTimer);
+      reconcileTimer = window.setTimeout(async () => {
+        reconcileController?.abort();
+        const requestController = new AbortController();
+        reconcileController = requestController;
+        try {
+          const response = await api.get<MediaSession[]>(endpoint, { signal: requestController.signal });
+          if (!active || requestController.signal.aborted || !Array.isArray(response.data)) return;
+          const current = response.data.filter(session => belongsToTarget(session, target)).map(withoutConnection);
+          current.forEach(session => removedParticipants.delete(String(session.userId)));
+          setSessions(previous => mergeSessions(
+            previous.filter(session => String(session.userId) === String(currentUser.id)),
+            current,
+          ));
+          setPresenceSynced(true);
+          // Ainda na sala de mídia, mas sem presença no servidor (expirou ou foi removida): entrar de novo a restaura.
+          if (joined && room?.state === 'connected' && !current.some(session => String(session.userId) === String(currentUser.id))) {
+            void api.post(endpoint).catch(() => undefined);
+          }
+        } catch {
+          // A próxima conferência tenta de novo.
+        }
+      }, 250);
+    };
+    reconcilePresenceRef.current = reconcilePresence;
+    const reconcileInterval = window.setInterval(reconcilePresence, PRESENCE_RECONCILE_INTERVAL_MS);
 
     const updateSpeakers = (speakers: Participant[]) => {
       if (!active) return;
@@ -678,6 +742,7 @@ export function MediaRoom({
             .filter(session => belongsToTarget(session, target))
             .filter(session => !removedParticipants.has(String(session.userId)));
           setSessions(previous => mergeSessions(previous, incoming));
+          setPresenceSynced(true);
         })
         .catch(error => {
           if (!active || controller.signal.aborted) return;
@@ -729,6 +794,7 @@ export function MediaRoom({
       room.on(RoomEvent.Reconnected, () => {
         if (!active) return;
         setConnectionState('connected');
+        reconcilePresence();
         void patchFromRoom('ACTIVE');
       });
       room.on(RoomEvent.Disconnected, () => {
@@ -765,11 +831,13 @@ export function MediaRoom({
       room.on(RoomEvent.ParticipantConnected, () => {
         if (!active) return;
         refreshTrackViews();
+        reconcilePresence();
         playCallSound('join');
       });
       room.on(RoomEvent.ParticipantDisconnected, () => {
         if (!active) return;
         refreshTrackViews();
+        reconcilePresence();
         playCallSound('leave');
       });
       room.on(RoomEvent.ActiveSpeakersChanged, updateSpeakers);
@@ -830,6 +898,10 @@ export function MediaRoom({
     return () => {
       active = false;
       joinedRef.current = false;
+      window.clearTimeout(reconcileTimer);
+      window.clearInterval(reconcileInterval);
+      reconcileController?.abort();
+      reconcilePresenceRef.current = () => undefined;
       releaseRoom(endpoint);
       controller.abort();
       unsubscribePresence();
@@ -901,15 +973,51 @@ export function MediaRoom({
           applyOwnPresence({}, withoutConnection(response.data));
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      // Eventos enviados enquanto o tempo real estava fora se perderam: confere a lista inteira.
+      .finally(() => reconcilePresenceRef.current());
   }, [applyOwnPresence, connectionRevision, endpoint]);
+
+  // O LiveKit é a fonte de verdade de quem está na sala: quem tem mídia conectada aparece mesmo que a presença
+  // ainda não tenha chegado, e o estado de microfone/câmera vem do que está de fato publicado.
+  const roomSessions = useMemo(() => {
+    const remoteById = new Map(remoteParticipants.map(participant => [participant.identity, participant]));
+    const merged = sessions.map(session => {
+      const live = remoteById.get(String(session.userId));
+      return live ? {
+        ...session,
+        microphoneEnabled: live.microphoneEnabled,
+        cameraEnabled: live.cameraEnabled,
+        screenShareEnabled: live.screenShareEnabled,
+      } : session;
+    });
+    const known = new Set(merged.map(session => String(session.userId)));
+    for (const participant of remoteParticipants) {
+      if (known.has(participant.identity)) continue;
+      merged.push({
+        channelKind: target.kind,
+        serverId: target.kind === 'SERVER_VOICE' ? target.serverId : null,
+        channelId: target.channelId,
+        userId: participant.identity,
+        userName: participant.name,
+        status: 'ACTIVE',
+        microphoneEnabled: participant.microphoneEnabled,
+        cameraEnabled: participant.cameraEnabled,
+        screenShareEnabled: participant.screenShareEnabled,
+        joinedAt: SYNTHETIC_TIMESTAMP,
+        lastSeenAt: SYNTHETIC_TIMESTAMP,
+      });
+    }
+    return merged;
+  }, [remoteParticipants, sessions, target]);
 
   useEffect(() => {
     onSummaryAction?.({
-      sessions,
+      sessions: roomSessions,
       speakingUserIds: [...activeSpeakers],
+      authoritative: presenceSynced,
     });
-  }, [activeSpeakers, onSummaryAction, sessions]);
+  }, [activeSpeakers, onSummaryAction, presenceSynced, roomSessions]);
 
   useEffect(() => {
     if (connectionState !== 'connected') return;
@@ -1038,8 +1146,8 @@ export function MediaRoom({
       .filter(view => view.source === Track.Source.ScreenShareAudio)
       .map(view => view.participantId),
   );
-  const visibleSessions = sessions.length
-    ? sessions
+  const visibleSessions = roomSessions.length
+    ? roomSessions
     : connectionState === 'loading' || connectionState === 'connecting'
       ? []
       : [{
