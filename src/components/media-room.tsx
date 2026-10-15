@@ -37,6 +37,7 @@ import {
   type RemoteTrack,
   type ScreenShareCaptureOptions,
 } from 'livekit-client';
+import toast from 'react-hot-toast';
 import api from '@/src/services/api';
 import { errorMessage } from '@/src/services/errors';
 import type {
@@ -107,6 +108,27 @@ interface RemoteParticipantView {
 }
 
 const PRESENCE_RECONCILE_INTERVAL_MS = 30_000;
+/** Ficar sozinho numa chamada consome minutos do servidor de mídia; depois desse tempo a chamada é encerrada. */
+export const ALONE_IN_CALL_TIMEOUT_MS = 10 * 60 * 1000;
+export const MEDIA_QUOTA_MESSAGE =
+  'O servidor de mídia recusou a conexão porque o limite de uso do plano foi atingido. Tente novamente mais tarde.';
+
+/**
+ * O SDK do LiveKit troca de região e devolve um erro genérico de WebSocket, escondendo o HTTP 429 que o servidor
+ * responde quando a cota do projeto acaba. Consulta o mesmo endpoint de validação que o SDK usa para distinguir esse caso.
+ */
+export async function mediaServerRejectsForQuota(connection: Pick<LiveKitConnection, 'url' | 'token'>) {
+  try {
+    const url = new URL(connection.url);
+    url.protocol = url.protocol === 'wss:' ? 'https:' : url.protocol === 'ws:' ? 'http:' : url.protocol;
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}/rtc/v1/validate`;
+    url.searchParams.set('access_token', connection.token);
+    const response = await fetch(url, { cache: 'no-store' });
+    return response.status === 429;
+  } catch {
+    return false;
+  }
+}
 const SYNTHETIC_TIMESTAMP = new Date(0).toISOString();
 
 const EMPTY_MEDIA: LocalMediaState = {
@@ -525,6 +547,7 @@ export function MediaRoom({
   const connectionRevisionRef = useRef(connectionRevision);
   const wantsMicrophoneRef = useRef(!microphoneMuted && !deafened);
   const onMicrophoneMutedChangeRef = useRef(onMicrophoneMutedChangeAction);
+  const onLeaveRef = useRef(onLeaveAction);
   const remoteAudioMuted = deafened;
 
   const [sessions, setSessions] = useState<MediaSession[]>([]);
@@ -857,8 +880,10 @@ export function MediaRoom({
         if (active) setNotice(friendlyMediaError(error, 'Um dispositivo de mídia falhou.'));
       });
 
+      // O handler de Disconnected limpa a credencial se a conexão falhar; o diagnóstico abaixo ainda precisa dela.
+      const roomCredential = credential;
       try {
-        await room.connect(credential.url, credential.token);
+        await room.connect(roomCredential.url, roomCredential.token);
         if (!active) return;
         playCallSound('join');
         setConnectionState('connected');
@@ -888,8 +913,12 @@ export function MediaRoom({
         if (roomRef.current === room) roomRef.current = null;
         await room.disconnect(true).catch(() => undefined);
         void api.delete(endpoint).catch(() => undefined);
+        const quotaExceeded = await mediaServerRejectsForQuota(roomCredential);
+        if (!active) return;
         setConnectionState('error');
-        setFatalError(friendlyMediaError(error, 'Não foi possível conectar ao servidor de mídia.'));
+        setFatalError(quotaExceeded
+          ? MEDIA_QUOTA_MESSAGE
+          : friendlyMediaError(error, 'Não foi possível conectar ao servidor de mídia.'));
       }
     }
 
@@ -922,6 +951,7 @@ export function MediaRoom({
   useEffect(() => {
     wantsMicrophoneRef.current = !microphoneMuted && !deafened;
     onMicrophoneMutedChangeRef.current = onMicrophoneMutedChangeAction;
+    onLeaveRef.current = onLeaveAction;
   });
 
   const setMicrophone = useCallback(async (room: Room, enabled: boolean) => {
@@ -1010,6 +1040,17 @@ export function MediaRoom({
     }
     return merged;
   }, [remoteParticipants, sessions, target]);
+
+  // Sozinho na sala por muito tempo (aba esquecida, ninguém atendeu): sai para não gastar a cota de mídia.
+  const aloneInRoom = connectionState === 'connected' && remoteParticipants.length === 0;
+  useEffect(() => {
+    if (!aloneInRoom) return;
+    const timer = window.setTimeout(() => {
+      toast(`Você saiu de ${target.title} porque ficou sozinho por ${ALONE_IN_CALL_TIMEOUT_MS / 60_000} minutos.`, { icon: '👋' });
+      onLeaveRef.current();
+    }, ALONE_IN_CALL_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [aloneInRoom, target.title]);
 
   useEffect(() => {
     onSummaryAction?.({
