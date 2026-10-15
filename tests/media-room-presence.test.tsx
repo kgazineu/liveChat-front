@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { MediaRoom } from '@/src/components/media-room';
+import { ALONE_IN_CALL_TIMEOUT_MS, MEDIA_QUOTA_MESSAGE, MediaRoom, mediaServerRejectsForQuota } from '@/src/components/media-room';
 import type { CurrentUser, MediaTarget } from '@/src/types';
 
 const mocks = vi.hoisted(() => ({
@@ -12,7 +12,11 @@ const mocks = vi.hoisted(() => ({
   realtime: { connected: true, connectionRevision: 1 },
   subscribePresence: () => () => undefined,
   rooms: [] as Array<{ emit: (event: string) => void; remoteParticipants: Map<string, unknown> }>,
+  connectError: null as Error | null,
+  toast: vi.fn(),
 }));
+
+vi.mock('react-hot-toast', () => ({ default: mocks.toast }));
 
 vi.mock('@/src/services/api', () => ({
   default: { get: mocks.get, post: mocks.post, patch: mocks.patch, delete: mocks.delete },
@@ -47,7 +51,12 @@ vi.mock('livekit-client', () => {
       return this;
     }
     emit(event: string) { this.handlers.get(event)?.forEach(handler => handler()); }
-    connect = vi.fn(async () => undefined);
+    connect = vi.fn(async () => {
+      if (!mocks.connectError) return;
+      // Como o SDK real: avisa a desconexão antes de rejeitar a conexão.
+      this.emit('Disconnected');
+      throw mocks.connectError;
+    });
     disconnect = vi.fn(async () => undefined);
     getActiveDevice() { return ''; }
   }
@@ -86,6 +95,8 @@ beforeEach(() => {
   mocks.delete.mockReset().mockResolvedValue({});
   mocks.realtime.connectionRevision = 1;
   mocks.rooms.length = 0;
+  mocks.connectError = null;
+  mocks.toast.mockReset();
 });
 
 function room() {
@@ -162,4 +173,63 @@ it('mostra quem já está na sala de mídia mesmo quando o evento de presença n
   })));
   // A entrada vista pelo LiveKit dispara uma nova conferência da lista no servidor.
   await waitFor(() => expect(mocks.get.mock.calls.length).toBeGreaterThan(getsBefore));
+});
+
+it('identifica a recusa por cota do servidor de mídia no endpoint de validação', async () => {
+  const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(async () => new Response('', { status: 429 }));
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    await expect(mediaServerRejectsForQuota({ url: 'wss://media.example.test', token: 'abc' })).resolves.toBe(true);
+    expect(String(fetchMock.mock.calls[0][0])).toBe('https://media.example.test/rtc/v1/validate?access_token=abc');
+
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }));
+    await expect(mediaServerRejectsForQuota({ url: 'wss://media.example.test', token: 'abc' })).resolves.toBe(false);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('explica a falha quando o servidor de mídia atingiu o limite do plano', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 429 })));
+  mocks.connectError = new Error('could not establish signal connection');
+  try {
+    render(room());
+    expect(await screen.findByText(MEDIA_QUOTA_MESSAGE)).toBeInTheDocument();
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith(endpoint));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('sai da chamada depois de ficar sozinho por muito tempo, mas não enquanto há companhia', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const onLeave = vi.fn();
+  try {
+    render(
+      <MediaRoom
+        currentUser={currentUser}
+        target={target}
+        visible
+        onOpenAction={() => undefined}
+        onLeaveAction={onLeave}
+      />,
+    );
+    await waitFor(() => expect(mocks.patch).toHaveBeenCalled());
+    const fakeRoom = mocks.rooms.at(-1)!;
+    fakeRoom.remoteParticipants.set('user-2', {
+      identity: 'user-2', name: 'Bruno', isMicrophoneEnabled: true, isCameraEnabled: false, isScreenShareEnabled: false,
+      trackPublications: new Map(),
+    });
+    act(() => fakeRoom.emit('ParticipantConnected'));
+    await act(async () => { vi.advanceTimersByTime(ALONE_IN_CALL_TIMEOUT_MS + 1000); });
+    expect(onLeave).not.toHaveBeenCalled();
+
+    fakeRoom.remoteParticipants.clear();
+    act(() => fakeRoom.emit('ParticipantDisconnected'));
+    await act(async () => { vi.advanceTimersByTime(ALONE_IN_CALL_TIMEOUT_MS + 1000); });
+    expect(onLeave).toHaveBeenCalledOnce();
+    expect(mocks.toast).toHaveBeenCalledWith(expect.stringContaining('ficou sozinho'), expect.anything());
+  } finally {
+    vi.useRealTimers();
+  }
 });
