@@ -21,7 +21,9 @@ vi.mock('@/src/services/api', () => ({ default: { get: mocks.apiGet } }));
 vi.mock('react-hot-toast', () => ({ default: { error: vi.fn() } }));
 vi.mock('@stomp/stompjs', () => ({
   ReconnectionTimeMode: { EXPONENTIAL: 'EXPONENTIAL' },
+  TickerStrategy: { Worker: 'worker', Interval: 'interval' },
   Client: class {
+    config: unknown;
     connected = true;
     activate = vi.fn();
     deactivate = vi.fn();
@@ -32,7 +34,10 @@ vi.mock('@stomp/stompjs', () => ({
     onWebSocketClose = vi.fn();
     onWebSocketError = vi.fn();
     onStompError = vi.fn();
-    constructor() { mocks.clients.push(this); }
+    constructor(config: unknown) {
+      this.config = config;
+      mocks.clients.push(this);
+    }
   },
 }));
 
@@ -62,6 +67,11 @@ it('assina todas as filas antes de publicar a revisão e entrega eventos sociais
   render(<RealtimeProvider><Probe /></RealtimeProvider>);
   await waitFor(() => expect(mocks.clients).toHaveLength(1));
   const client = mocks.clients[0] as Client;
+  expect((client as unknown as { config: Record<string, unknown> }).config).toMatchObject({
+    heartbeatIncoming: 10000,
+    heartbeatOutgoing: 10000,
+    heartbeatStrategy: 'worker',
+  });
 
   await act(async () => { client.onConnect({} as never); });
 
